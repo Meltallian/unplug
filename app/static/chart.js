@@ -112,7 +112,82 @@
   }
   sheet.addEventListener("click", (e) => {
     if (e.target.closest("a, button, form, textarea")) return;
-    if (scrolling) setScrolling(false);
+    if (scrolling) { setScrolling(false); return; }   // while scrolling, a tap only pauses
+    const ch = e.target.closest(".ch[data-i]");
+    if (ch) openPicker(ch);
+  });
+
+  // --- tap a chord to change it ----------------------------------------------------------------
+  const picker = document.getElementById("picker");
+  const options = document.getElementById("picker-options");
+  let editing = null;
+
+  function semis() { return chartCapo + state.key - state.capo; }
+
+  function candidates(shown) {
+    // chords that fit the key (as shapes for the current capo), plus major/minor and relative swaps
+    const out = [shown];
+    const m = CHORD.exec(shown);
+    if (m) {
+      const root = pc(m[1], m[2]);
+      const minor = /^(m(?!aj)|min|-)/.test(m[3]);
+      out.push(NAMES[root] + (minor ? "" : "m"));
+      out.push(minor ? NAMES[(root + 3) % 12] : NAMES[(root + 9) % 12] + "m");
+    }
+    const key = chartKey ? moveChord(chartKey, state.key - state.capo) : "";
+    const k = CHORD.exec(key);
+    if (k) {
+      const t = pc(k[1], k[2]);
+      const minorKey = /^m(?!aj)/.test(k[3]);
+      const degrees = minorKey ? [[0, "m"], [3, ""], [5, "m"], [7, "m"], [8, ""], [10, ""], [7, ""]]
+                               : [[0, ""], [2, "m"], [4, "m"], [5, ""], [7, ""], [9, "m"]];
+      degrees.forEach(([d, q]) => out.push(NAMES[(t + d) % 12] + q));
+    }
+    return [...new Set(out)].slice(0, 12);
+  }
+
+  function openPicker(ch) {
+    editing = ch;
+    ch.classList.add("editing");
+    const shown = ch.textContent.trim();
+    document.getElementById("picker-title").textContent = "Change " + shown;
+    options.replaceChildren(...candidates(shown).map((name) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = name; b.dataset.pick = name;
+      if (name === shown) b.classList.add("current");
+      return b;
+    }));
+    picker.hidden = false;
+  }
+
+  function closePicker() {
+    picker.hidden = true;
+    if (editing) editing.classList.remove("editing");
+    editing = null;
+  }
+
+  async function save(shownName) {
+    const el = editing;
+    const chartName = shownName ? moveChord(shownName, -semis()) : "";
+    const body = new URLSearchParams({ index: el.dataset.i, chord: chartName });
+    const r = await fetch(`/songs/${sheet.dataset.song}/chord`, { method: "POST", body });
+    if (!r.ok) { alert(r.status === 409 ? "The chart changed; reload the page." : "Couldn't save that chord."); return; }
+    if (chartName) el.dataset.c = chartName;
+    else { el.removeAttribute("data-c"); el.classList.add("empty"); el.textContent = ""; }
+    closePicker();
+    render();
+  }
+
+  picker.addEventListener("click", (e) => {
+    if (e.target === picker || e.target.closest("[data-pick-close]")) return closePicker();
+    const pick = e.target.closest("[data-pick]");
+    if (pick) return save(pick.dataset.pick);
+    if (e.target.closest("[data-pick-remove]")) return save("");
+  });
+  document.getElementById("picker-custom").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = e.target.c.value.trim();
+    if (v) save(v);
   });
 
   // --- toolbar -------------------------------------------------------------------------------

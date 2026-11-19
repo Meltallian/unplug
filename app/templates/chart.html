@@ -21,7 +21,8 @@
   <div class="diagrams" id="diagrams" aria-label="Chord diagrams"></div>
 </header>
 
-<main class="sheet" id="sheet"
+{% set ns = namespace(i=0) %}
+<main class="sheet" id="sheet" data-song="{{ song.id }}"
       data-key="{{ chart.meta.get('key', '') }}" data-capo="{{ chart.meta.get('capo', '0') }}"
       data-tempo="{{ chart.meta.get('tempo', '') }}">
   {% if own %}<p class="note">Your edited version. <form method="post" action="/songs/{{ song.id }}/reset" class="inline"
@@ -30,7 +31,7 @@
   <section>
     {% if section.name %}<h2>[{{ section.name }}]</h2>{% endif %}
     {% for line in section.lines %}
-    <div class="line{% if line | selectattr(1) | map(attribute=1) | join | trim == '' %} chords-only{% endif %}">{% for chord, text in line %}<span class="seg">{% if chord %}<b class="ch" data-c="{{ chord }}">{{ chord }}</b>{% else %}<b class="ch empty"></b>{% endif %}<span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
+    <div class="line{% if line | selectattr(1) | map(attribute=1) | join | trim == '' %} chords-only{% endif %}">{% for chord, text in line %}<span class="seg">{% if chord %}<b class="ch" data-c="{{ chord }}" data-i="{{ ns.i }}" role="button" tabindex="0">{{ chord }}</b>{% set ns.i = ns.i + 1 %}{% else %}<b class="ch empty"></b>{% endif %}<span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
     {% endfor %}
   </section>
   {% endfor %}
@@ -57,6 +58,14 @@
   <div class="grp"><button data-act="key-">♭</button><span id="key-label">Key</span><button data-act="key+">♯</button></div>
   <div class="grp"><button data-act="scroll" id="scroll-btn" aria-label="Auto-scroll">▶</button></div>
 </nav>
+<div class="picker" id="picker" hidden>
+  <div class="picker-card" role="dialog" aria-label="Change chord">
+    <div class="picker-head"><span id="picker-title">Change chord</span><button class="link" data-pick-close>Close</button></div>
+    <div class="picker-options" id="picker-options"></div>
+    <form class="picker-custom" id="picker-custom"><input name="c" placeholder="Other chord, e.g. Fmaj7" autocomplete="off" autocapitalize="off"><button>OK</button></form>
+    <button class="link danger" data-pick-remove>Remove this chord</button>
+  </div>
+</div>
 <script src="/static/chart.js"></script>
 </body>
 </html>

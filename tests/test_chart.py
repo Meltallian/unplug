@@ -108,3 +108,13 @@ def test_lyrics_failure_does_not_fail(tmp_path, monkeypatch):
     (tmp_path / "cache").mkdir()
     out = lyrics.fetch_lyrics(tmp_path, tmp_path / "a.wav", {"title": "A - B", "duration": 10})
     assert out["source"] == "none" and "error" in out
+
+
+def test_replace_chord():
+    from app.pipeline.chart import replace_chord
+    text = "{title: T}\n{c: Verse}\n[Am]Is it so [C]perfect\n[F]  [G]\n"
+    assert replace_chord(text, 1, "Em") == "{title: T}\n{c: Verse}\n[Am]Is it so [Em]perfect\n[F]  [G]\n"
+    assert replace_chord(text, 3, None) == "{title: T}\n{c: Verse}\n[Am]Is it so [C]perfect\n[F]  \n"
+    import pytest
+    with pytest.raises(IndexError):
+        replace_chord(text, 9, "C")

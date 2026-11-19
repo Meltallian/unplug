@@ -135,3 +135,15 @@ def test_paste_refused_when_lrclib_lyrics_exist(client, tmp_path, monkeypatch):
     (tmp_path / "songs" / "_K6KyS3vxkc" / "cache" / "lyrics.json").write_text(
         json.dumps({"source": "lrclib", "synced": True, "lines": [{"t": 1.0, "text": "real"}]}))
     assert client.post(url + "/lyrics", data={"lyrics": "vandal"}).status_code == 409
+
+
+def test_tap_edit_changes_one_chord_in_own_copy(client, tmp_path, monkeypatch):
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)
+    page = client.get(url).text
+    assert 'data-i="0"' in page
+    assert client.post(url + "/chord", data={"index": 0, "chord": "Am"}).status_code == 204
+    assert 'data-c="Am"' in client.get(url).text
+    assert client.post(url + "/chord", data={"index": 0, "chord": "<script>"}).status_code == 400
+    assert client.post(url + "/chord", data={"index": 5, "chord": "C"}).status_code == 409
+    client.post(url + "/reset")
+    assert 'data-c="C"' in client.get(url).text      # the shared draft was never touched

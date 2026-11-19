@@ -165,6 +165,32 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
     return "\n".join(out) + "\n"
 
 
+# --- editing one chord in place ---------------------------------------------------------------
+
+CHORD_SYMBOL = re.compile(r"^[A-G][#b]?[A-Za-z0-9#b+()]{0,8}(/[A-G][#b]?)?$")
+
+
+def replace_chord(text: str, index: int, new: str | None) -> str:
+    """Replace (or with new=None remove) the index-th inline chord, counting like parse_chordpro."""
+    out, count = [], 0
+    for line in text.split("\n"):
+        if _DIRECTIVE.match(line.strip()):
+            out.append(line)
+            continue
+
+        def swap(m: re.Match) -> str:
+            nonlocal count
+            hit = count == index
+            count += 1
+            if not hit:
+                return m.group(0)
+            return "" if new is None else f"[{new}]"
+        out.append(_INLINE.sub(swap, line))
+    if index >= count:
+        raise IndexError(index)
+    return "\n".join(out)
+
+
 # --- reading ChordPro back (for the chart view) --------------------------------------------------
 
 _DIRECTIVE = re.compile(r"^\{\s*([a-zA-Z_]+)\s*(?::\s*(.*?))?\s*\}$")

@@ -9,7 +9,7 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -74,16 +74,20 @@ def _queue_position(session: Session, song: Song) -> int | None:
 
 
 @app.get("/", response_class=HTMLResponse)
-def library(request: Request, q: str = "", user: CurrentUser = Depends(current_user),
+def library(request: Request, q: str = "", all: int = 0, user: CurrentUser = Depends(current_user),
             session: Session = Depends(get_session)):
-    stmt = (select(LibraryEntry).join(Song).where(LibraryEntry.user_id == user.id)
-            .order_by(LibraryEntry.created_at.desc()))
+    show_all = bool(all) and user.is_admin
+    if show_all:   # admin: every song on the server, also those in nobody's library
+        stmt = select(Song).order_by(Song.created_at.desc())
+    else:
+        stmt = (select(Song).join(LibraryEntry).where(LibraryEntry.user_id == user.id)
+                .order_by(LibraryEntry.created_at.desc()))
     if q:
         like = f"%{q}%"
         stmt = stmt.where(Song.title.ilike(like) | Song.artist.ilike(like))
-    entries = session.scalars(stmt).all()
+    songs = session.scalars(stmt).all()
     return templates.TemplateResponse(request, "library.html",
-                                      {"entries": entries, "q": q, "user": user, "error": None})
+                                      {"songs": songs, "q": q, "user": user, "show_all": show_all})
 
 
 @app.post("/songs")
@@ -348,10 +352,46 @@ def reprocess(song_id: int, user: CurrentUser = Depends(current_user),
 @app.post("/songs/{song_id}/remove")
 def remove(song_id: int, user: CurrentUser = Depends(current_user),
            session: Session = Depends(get_session)):
-    """Remove from the user's library. The shared song and its audio stay (admin can purge later)."""
-    entry = session.scalar(select(LibraryEntry).where(LibraryEntry.user_id == user.id,
-                                                      LibraryEntry.song_id == song_id))
-    if entry:
-        session.delete(entry)
-        session.commit()
+    """Remove from the user's library, with the user's own edited copy. The shared song stays."""
+    session.execute(delete(LibraryEntry).where(LibraryEntry.user_id == user.id, LibraryEntry.song_id == song_id))
+    session.execute(delete(Chart).where(Chart.user_id == user.id, Chart.song_id == song_id))
+    session.commit()
+    return RedirectResponse("/", status_code=303)
+
+
+def _fixture_ids() -> set[str]:
+    """YouTube ids used by evaluation fixtures: their audio is kept even when a song is deleted."""
+    import json
+
+    from app.youtube import parse_youtube_id
+
+    ids = set()
+    for src in (get_settings().data_dir / "fixtures").glob("*/source.json"):
+        try:
+            ids.add(parse_youtube_id(json.loads(src.read_text())["youtube_url"]))
+        except (OSError, ValueError, KeyError):
+            continue
+    return ids
+
+
+@app.post("/songs/{song_id}/delete")
+def delete_song(song_id: int, user: CurrentUser = Depends(current_user),
+                session: Session = Depends(get_session)):
+    """Admin only: delete a song for everyone (library entries, all chart copies, audio)."""
+    import shutil
+
+    if not user.is_admin:
+        raise HTTPException(403, "Only the admin can delete a song for everyone.")
+    song = session.get(Song, song_id)
+    if song is None:
+        raise HTTPException(404)
+    if song.status in PENDING and song.updated_at > datetime.now(timezone.utc) - STALE_AFTER:
+        raise HTTPException(409, "This song is being processed; try again when it has finished.")
+    youtube_id = song.youtube_id
+    session.execute(delete(LibraryEntry).where(LibraryEntry.song_id == song_id))
+    session.execute(delete(Chart).where(Chart.song_id == song_id))
+    session.delete(song)
+    session.commit()
+    if youtube_id not in _fixture_ids():
+        shutil.rmtree(get_settings().songs_dir / youtube_id, ignore_errors=True)
     return RedirectResponse("/", status_code=303)

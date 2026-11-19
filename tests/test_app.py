@@ -174,3 +174,42 @@ def test_pdf_limits(client, tmp_path, monkeypatch):
         c.chordpro = "{capo: 12}\n" + "[C]la\n" * 8000
         s.commit()
     assert client.get(url + "/pdf").status_code == 413
+
+
+def test_remove_deletes_own_copy_but_keeps_song(client, tmp_path, monkeypatch):
+    from app.db import SessionLocal
+    from app.models import Chart, Song
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)
+    client.post(url + "/chord", data={"index": 0, "chord": "G", "expected": "C"})
+    client.post(url + "/remove")
+    with SessionLocal() as s:
+        assert s.query(Song).count() == 1
+        assert s.query(Chart).filter(Chart.user_id.isnot(None)).count() == 0
+    assert "No songs yet" in client.get("/").text
+
+
+def test_delete_for_everyone_is_admin_only(client, tmp_path, monkeypatch):
+    from app.config import get_settings
+    from app.db import SessionLocal
+    from app.models import Song
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)
+    assert client.post(url + "/delete").status_code == 403
+    monkeypatch.setattr(get_settings(), "admin_emails", "tester@example.com")
+    song_dir = tmp_path / "songs" / "_K6KyS3vxkc"
+    assert song_dir.exists()
+    assert "All songs (admin)" in client.get("/").text
+    client.post(url + "/delete")
+    with SessionLocal() as s:
+        assert s.query(Song).count() == 0
+    assert not song_dir.exists()
+
+
+def test_delete_keeps_fixture_audio(client, tmp_path, monkeypatch):
+    import json
+    from app.config import get_settings
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)
+    monkeypatch.setattr(get_settings(), "admin_emails", "tester@example.com")
+    (tmp_path / "fixtures" / "x").mkdir(parents=True)
+    (tmp_path / "fixtures" / "x" / "source.json").write_text(json.dumps({"youtube_url": "https://youtu.be/_K6KyS3vxkc"}))
+    client.post(url + "/delete")
+    assert (tmp_path / "songs" / "_K6KyS3vxkc").exists()

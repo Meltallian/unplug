@@ -58,3 +58,15 @@ def test_corrupt_chord_cache_is_recomputed(tmp_path, monkeypatch):
     import pytest
     with pytest.raises(RuntimeError, match="recomputing"):
         chords.analyze(tmp_path / "x.wav", out)
+
+
+def test_bass_pulls_towards_chord_with_that_root():
+    import numpy as np
+    from app.pipeline.chords import Params, decode
+    # Chroma that fits F and Dm about equally (D F A C), with an F in the bass
+    chroma = np.zeros((12, 8)); chroma[[2, 5, 9, 0], :] = np.array([0.9, 1.0, 1.0, 0.9])[:, None]
+    bass = np.zeros((12, 8)); bass[5, :] = 1.0
+    feats = {"chroma": chroma, "bass": bass, "rms": np.ones(8), "times": np.arange(9.0),
+             "tuning": np.array(0.0), "tempo": np.array(90.0)}
+    with_bass = decode(feats, Params(bass_weight=1.0))
+    assert with_bass["segments"][0]["name"] == "F"

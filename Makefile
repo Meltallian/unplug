@@ -15,6 +15,6 @@ test:
 lock:
 	docker run --rm -v $(PWD):/w -w /w ghcr.io/astral-sh/uv:0.5.11-python3.12-bookworm-slim uv lock
 eval:   ## score every fixture with the cached pipeline
-	$(COMPOSE) run --rm --no-deps worker python -m app.eval.run
+	$(COMPOSE) run --rm --no-deps worker python -m app.eval.run $(ARGS)
 shell:
 	$(COMPOSE) exec web bash

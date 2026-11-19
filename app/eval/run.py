@@ -22,7 +22,8 @@ from app.config import get_settings
 from app.eval.sheet import parse_sheet
 from app.music import Chord, chord_name, diatonic, key_from_chords, key_name, same_scale, transpose
 from app.pipeline.audio import decode
-from app.pipeline.chords import VERSION, analyze, load_segments
+from app.pipeline.chart import _clean_segments
+from app.pipeline.chords import VERSION, analyze, load_segments, with_overrides
 from app.youtube import parse_youtube_id
 
 MIN_SHARE = 0.02  # detected chords covering less time than this are ignored for set scores
@@ -45,14 +46,18 @@ def _f1(ref: set, hyp: set) -> float:
     return 2 * tp / (len(ref) + len(hyp))
 
 
-def score_song(fixture: Path, songs_dir: Path) -> dict:
+def score_song(fixture: Path, songs_dir: Path, params=None) -> dict:
     src = json.loads((fixture / "source.json").read_text())
     youtube_id = parse_youtube_id(src["youtube_url"])
     song_dir = songs_dir / youtube_id
     if not (song_dir / "meta.json").exists():
         return {"song": src["song"], "error": "audio not downloaded"}
-    result = analyze(decode(song_dir), song_dir / "cache" / "chords.json")
-    segs = load_segments(result)
+    result = analyze(decode(song_dir), song_dir / "cache" / "chords.json", params)
+    raw = load_segments(result)
+    # Score what the chart shows: very short chords are merged away there, so they are here too.
+    shown = _clean_segments(raw)
+    segs = [(c, s, e, b) for c, s, e, b in raw if c == "N"] + list(shown)
+    segs.sort(key=lambda x: x[1])
     det_key = (result["key"]["tonic"], result["key"]["mode"])
 
     total = sum(e - s for _, s, e, _ in segs) or 1.0
@@ -124,8 +129,16 @@ def _fmt(v) -> str:
     return "" if v is None else str(v)
 
 
+def _parse_overrides(argv: list[str]) -> dict[str, float]:
+    """`make eval ARGS="bass_weight=1 self_transition=0.9"` → experiment without changing the code."""
+    return {k: float(v) for k, v in (a.split("=", 1) for a in argv if "=" in a)}
+
+
 def main() -> int:
     settings = get_settings()
+    overrides = _parse_overrides(sys.argv[1:])
+    params = with_overrides(overrides) if overrides else None
+    label = VERSION + ("+" + ",".join(f"{k}={v:g}" for k, v in overrides.items()) if overrides else "")
     fixtures_dir = settings.data_dir / "fixtures"
     runs_dir = settings.data_dir / "eval"
     runs_dir.mkdir(exist_ok=True)
@@ -133,7 +146,7 @@ def main() -> int:
     rows = []
     for fixture in sorted(p for p in fixtures_dir.iterdir() if (p / "source.json").exists()):
         t0 = time.time()
-        row = score_song(fixture, settings.songs_dir)
+        row = score_song(fixture, settings.songs_dir, params)
         row["secs"] = round(time.time() - t0, 1)
         rows.append(row)
 
@@ -141,7 +154,7 @@ def main() -> int:
         print(f"no fixtures found in {fixtures_dir}")
         return 1
     width = max(len(r["song"]) for r in rows) + 2
-    print(f"\nchord stage: {VERSION}\n")
+    print(f"\nchord stage: {label}\n")
     print("song".ljust(width) + "key   sheet  " + "".join(c.rjust(10) for c in COLUMNS))
     for r in rows:
         if "error" in r:
@@ -158,9 +171,6 @@ def main() -> int:
         print(f"  {r['song']}: detected [{r['detected']}]  sheet [{r['sheet']}]  capo {r['capo']}")
 
     previous = sorted(runs_dir.glob("*.json"))
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    out = runs_dir / f"{stamp}-{VERSION}.json"
-    out.write_text(json.dumps({"version": VERSION, "rows": rows, "means": means}, indent=1))
     if previous:
         prev = json.loads(previous[-1].read_text())
         shared = {r["song"] for r in rows} & {r["song"] for r in prev["rows"]}
@@ -169,9 +179,18 @@ def main() -> int:
                         [r for r in prev["rows"] if r["song"] in shared and "inkey" in r])
         print(f"\nchange vs {previous[-1].name} (over {len(shared)} shared songs): " + "  ".join(
             f"{k} {now[k] - before[k]:+.2f}" for k in now if k in before))
+        per_song = {r["song"]: r for r in prev["rows"]}
+        for metric in ("chords@s", "trans@s"):
+            moved = [f"{r['song'][:14]} {r[metric] - per_song[r['song']].get(metric, 0):+.2f}"
+                     for r in scored if r["song"] in per_song and metric in per_song[r["song"]]]
+            print(f"per song ({metric}): " + ", ".join(moved))
+    if overrides:   # experiments are printed, not saved as runs
+        return 0
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    out = runs_dir / f"{stamp}-{VERSION}.json"
+    out.write_text(json.dumps({"version": VERSION, "rows": rows, "means": means}, indent=1))
     print(f"\nsaved {out}")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

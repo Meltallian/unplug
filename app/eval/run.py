@@ -26,6 +26,7 @@ from app.pipeline.chart import _clean_segments
 from app.pipeline.chords import VERSION, analyze, load_segments, with_overrides
 from app.youtube import parse_youtube_id
 
+SCORING = "post-filter-1"  # bump when the way scores are computed changes
 MIN_SHARE = 0.02  # detected chords covering less time than this are ignored for set scores
 
 
@@ -56,8 +57,10 @@ def score_song(fixture: Path, songs_dir: Path, params=None) -> dict:
     raw = load_segments(result)
     # Score what the chart shows: very short chords are merged away there, so they are here too.
     shown = _clean_segments(raw)
-    segs = [(c, s, e, b) for c, s, e, b in raw if c == "N"] + list(shown)
-    segs.sort(key=lambda x: x[1])
+    covered = [(s, e) for _, s, e, _ in shown]
+    gaps = [(c, s, e, b) for c, s, e, b in raw
+            if c == "N" and not any(cs <= s and e <= ce for cs, ce in covered)]
+    segs = sorted(gaps + list(shown), key=lambda x: x[1])
     det_key = (result["key"]["tonic"], result["key"]["mode"])
 
     total = sum(e - s for _, s, e, _ in segs) or 1.0
@@ -170,7 +173,8 @@ def main() -> int:
     for r in scored:
         print(f"  {r['song']}: detected [{r['detected']}]  sheet [{r['sheet']}]  capo {r['capo']}")
 
-    previous = sorted(runs_dir.glob("*.json"))
+    previous = [p for p in sorted(runs_dir.glob("*.json"))
+                if json.loads(p.read_text()).get("scoring") == SCORING]
     if previous:
         prev = json.loads(previous[-1].read_text())
         shared = {r["song"] for r in rows} & {r["song"] for r in prev["rows"]}
@@ -188,7 +192,7 @@ def main() -> int:
         return 0
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = runs_dir / f"{stamp}-{VERSION}.json"
-    out.write_text(json.dumps({"version": VERSION, "rows": rows, "means": means}, indent=1))
+    out.write_text(json.dumps({"version": VERSION, "scoring": SCORING, "rows": rows, "means": means}, indent=1))
     print(f"\nsaved {out}")
     return 0
 

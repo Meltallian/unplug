@@ -49,8 +49,10 @@ def features(wav: Path) -> dict:
     if cache.exists():
         try:
             with np.load(cache) as z:
-                return {k: z[k] for k in z.files}
-        except (OSError, ValueError):
+                feats = {k: z[k] for k in z.files}
+            if {"chroma", "bass", "rms", "times", "tuning", "tempo"} <= feats.keys():
+                return feats
+        except Exception:  # corrupt or partial cache (e.g. BadZipFile): recompute
             pass
 
     y, sr = librosa.load(wav, sr=None, mono=True)
@@ -77,8 +79,11 @@ def features(wav: Path) -> dict:
         "tempo": np.array(float(np.atleast_1d(tempo)[0])),
     }
     tmp = cache.with_name(f"{cache.stem}.{os.getpid()}.tmp.npz")
-    np.savez_compressed(tmp, **feats)
-    tmp.replace(cache)
+    try:
+        np.savez_compressed(tmp, **feats)
+        tmp.replace(cache)
+    finally:
+        tmp.unlink(missing_ok=True)
     return feats
 
 
@@ -133,7 +138,7 @@ def analyze(wav: Path, out: Path, params: Params | None = None) -> dict:
     if params is None and out.exists():
         try:
             cached = json.loads(out.read_text())
-            if cached.get("version") == VERSION:
+            if cached.get("version") == VERSION and cached.get("params") == asdict(PARAMS):
                 return cached
         except (json.JSONDecodeError, OSError):
             pass  # corrupt cache: recompute

@@ -63,10 +63,19 @@ def test_corrupt_chord_cache_is_recomputed(tmp_path, monkeypatch):
 def test_bass_pulls_towards_chord_with_that_root():
     import numpy as np
     from app.pipeline.chords import Params, decode
-    # Chroma that fits F and Dm about equally (D F A C), with an F in the bass
-    chroma = np.zeros((12, 8)); chroma[[2, 5, 9, 0], :] = np.array([0.9, 1.0, 1.0, 0.9])[:, None]
+    # Chroma that slightly favours Dm (D F A + a little C), with an F in the bass
+    chroma = np.zeros((12, 8)); chroma[[2, 5, 9, 0], :] = np.array([1.0, 1.0, 1.0, 0.5])[:, None]
     bass = np.zeros((12, 8)); bass[5, :] = 1.0
     feats = {"chroma": chroma, "bass": bass, "rms": np.ones(8), "times": np.arange(9.0),
              "tuning": np.array(0.0), "tempo": np.array(90.0)}
-    with_bass = decode(feats, Params(bass_weight=1.0))
-    assert with_bass["segments"][0]["name"] == "F"
+    assert decode(feats, Params(bass_weight=0.0))["segments"][0]["name"] == "Dm"
+    assert decode(feats, Params(bass_weight=1.0))["segments"][0]["name"] == "F"
+
+
+def test_corrupt_features_cache_is_recomputed(tmp_path, monkeypatch):
+    import pytest
+    from app.pipeline import chords
+    (tmp_path / f"features-{chords.FEATURES_VERSION}.npz").write_bytes(b"PK\x03\x04 truncated")
+    monkeypatch.setattr(chords.librosa, "load", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("recomputing")))
+    with pytest.raises(RuntimeError, match="recomputing"):
+        chords.features(tmp_path / "audio.wav")

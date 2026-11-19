@@ -43,7 +43,8 @@ def parse_lrc(text: str) -> list[dict]:
     for raw in text.splitlines():
         m = _LRC_LINE.match(raw.strip())
         if m:
-            lines.append({"t": int(m.group(1)) * 60 + float(m.group(2)), "text": m.group(3).strip()})
+            text = m.group(3).strip().replace("[", "(").replace("]", ")")  # never read as chords
+            lines.append({"t": int(m.group(1)) * 60 + float(m.group(2)), "text": text})
     return lines
 
 

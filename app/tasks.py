@@ -5,6 +5,8 @@ from sqlalchemy import update
 
 from app.db import SessionLocal
 from app.models import Song, SongStatus
+from app.pipeline.audio import decode
+from app.pipeline.chords import analyze
 from app.pipeline.download import download
 
 settings = get_settings()
@@ -38,7 +40,9 @@ def process_song(song_id: int) -> None:
         meta = download(youtube_id, song_dir, settings.cookies_file)
         _set(song_id, title=meta["title"], duration=meta["duration"],
              artist=meta.get("artist") or meta.get("uploader"))
-        # Later stages (tuning, beats, chords, lyrics, alignment, simplify) plug in here.
+        _set(song_id, stage="chords")
+        analyze(decode(song_dir), song_dir / "cache" / "chords.json")
+        # Later stages (lyrics, alignment, chart) plug in here.
         _set(song_id, status=SongStatus.done, stage=None)
     except Exception as exc:  # report any failure to the user
         _set(song_id, status=SongStatus.failed, error=f"{type(exc).__name__}: {exc}"[:2000])

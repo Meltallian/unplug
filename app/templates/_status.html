@@ -6,6 +6,6 @@
   {% elif song.status.value == "failed" %}
     <p class="error">Failed: {{ song.error }}</p>
   {% else %}
-    <p>Audio downloaded{% if song.duration %} ({{ (song.duration // 60)|int }}:{{ "%02d"|format((song.duration % 60)|int) }}){% endif %}. Chords coming in the next build step.</p>
+    <p>Done.{% if song.status.value == "done" and not analysis %} <a href="/songs/{{ song.id }}">Show chords</a>{% endif %}</p>
   {% endif %}
 </div>

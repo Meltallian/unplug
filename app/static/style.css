@@ -29,3 +29,5 @@ code { background: var(--card); border: 1px solid var(--line); border-radius: 4p
 .small { font-size: .8rem; }
 button.secondary.danger { color: #c0392b; border-color: #c0392b; }
 main a { color: var(--accent); }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 6px 0; }
+.bar > div { height: 100%; background: var(--accent); transition: width 1.5s linear; }

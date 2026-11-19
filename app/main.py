@@ -13,6 +13,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app import progress
 from app.auth import CurrentUser, current_user
 from app.config import Settings, get_settings
 from app.db import SessionLocal, get_session
@@ -61,6 +62,12 @@ def _enqueue(song_id: int) -> None:
             s.execute(update(Song).where(Song.id == song_id).values(
                 status=SongStatus.failed, error=f"Could not queue job: {type(exc).__name__}"))
             s.commit()
+
+
+def _status_info(session: Session, song: Song) -> dict:
+    pos = _queue_position(session, song)
+    return {"pos": pos, "wait": progress.queue_wait(session, pos) if pos else None,
+            "prog": progress.progress(session, song), "fmt": progress.fmt}
 
 
 def _queue_position(session: Session, song: Song) -> int | None:
@@ -159,8 +166,8 @@ def song_page(request: Request, song_id: int, user: CurrentUser = Depends(curren
     song = _song_for_user(session, song_id, user)
     chart, own = _chart_for(session, song, user)
     if song.status != SongStatus.done or chart is None:
-        return templates.TemplateResponse(request, "song.html",
-                                          {"song": song, "pos": _queue_position(session, song), "user": user})
+        return templates.TemplateResponse(request, "song.html", {"song": song, "user": user,
+                                                                 **_status_info(session, song)})
     lyrics = _lyrics_info(song)
     return templates.TemplateResponse(request, "chart.html", {
         "song": song, "user": user, "chart": parse_chordpro(chart.chordpro), "own": own,
@@ -325,8 +332,7 @@ def paste_lyrics(song_id: int, lyrics: str = Form(...), user: CurrentUser = Depe
 def song_status(request: Request, song_id: int, user: CurrentUser = Depends(current_user),
                 session: Session = Depends(get_session)):
     song = _song_for_user(session, song_id, user)
-    return templates.TemplateResponse(request, "_status.html",
-                                      {"song": song, "pos": _queue_position(session, song)})
+    return templates.TemplateResponse(request, "_status.html", {"song": song, **_status_info(session, song)})
 
 
 @app.post("/songs/{song_id}/reprocess")

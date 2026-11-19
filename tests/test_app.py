@@ -213,3 +213,32 @@ def test_delete_keeps_fixture_audio(client, tmp_path, monkeypatch):
     (tmp_path / "fixtures" / "x" / "source.json").write_text(json.dumps({"youtube_url": "https://youtu.be/_K6KyS3vxkc"}))
     client.post(url + "/delete")
     assert (tmp_path / "songs" / "_K6KyS3vxkc").exists()
+
+
+def test_progress_shows_stage_and_estimate(client):
+    from datetime import datetime, timedelta, timezone
+    from app.db import SessionLocal
+    from app.models import Song, SongStatus
+    url = client.post("/songs", data={"link": "_K6KyS3vxkc"}, follow_redirects=False).headers["location"]
+    with SessionLocal() as s:
+        song = s.query(Song).one()
+        song.status, song.stage, song.duration = SongStatus.processing, "chords", 240
+        song.stage_started_at = datetime.now(timezone.utc) - timedelta(seconds=12)
+        s.commit()
+    text = client.get(url + "/status").text
+    assert "Detecting chords" in text and "step 2 of 4" in text and "12 s so far" in text and "left in total" in text
+
+
+def test_stage_timings_recorded():
+    from app import tasks
+    from app.db import SessionLocal, init_db
+    from app.models import Song, SongStatus
+    init_db()
+    with SessionLocal() as s:
+        song = Song(youtube_id="ttttttttttt", status=SongStatus.processing, stage="starting"); s.add(song); s.commit()
+        sid = song.id
+    tasks._stage(sid, "download"); tasks._stage(sid, "chords"); tasks._stage(sid, None)
+    with SessionLocal() as s:
+        song = s.get(Song, sid)
+        assert set(song.timings) == {"download", "chords"} and song.stage is None
+        s.delete(song); s.commit()

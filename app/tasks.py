@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 from celery import Celery
 from sqlalchemy import select, update
@@ -22,6 +23,20 @@ def _set(song_id: int, **fields) -> None:
         song = s.get(Song, song_id)
         for k, v in fields.items():
             setattr(song, k, v)
+        s.commit()
+
+
+def _stage(song_id: int, stage: str | None) -> None:
+    """Move to the next stage, recording how long the previous one took (shown as estimates)."""
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as s:
+        song = s.get(Song, song_id)
+        if song.stage and song.stage_started_at and song.stage != "starting":
+            started = song.stage_started_at
+            if started.tzinfo is None:          # SQLite returns naive datetimes
+                started = started.replace(tzinfo=timezone.utc)
+            song.timings = {**(song.timings or {}), song.stage: round((now - started).total_seconds(), 1)}
+        song.stage, song.stage_started_at = stage, now if stage else None
         s.commit()
 
 
@@ -54,7 +69,8 @@ def process_song(song_id: int) -> None:
     with SessionLocal() as s:
         claimed = s.execute(
             update(Song).where(Song.id == song_id, Song.status == SongStatus.queued)
-            .values(status=SongStatus.processing, stage="starting")
+            .values(status=SongStatus.processing, stage="starting", timings={},
+                    started_at=datetime.now(timezone.utc), stage_started_at=datetime.now(timezone.utc))
         ).rowcount
         s.commit()
         if not claimed:
@@ -62,20 +78,21 @@ def process_song(song_id: int) -> None:
         youtube_id = s.get(Song, song_id).youtube_id
     song_dir = settings.songs_dir / youtube_id
     try:
-        _set(song_id, stage="download", error=None)
+        _stage(song_id, "download")
         meta = download(youtube_id, song_dir, settings.cookies_file)
         artist, track = guess_artist_track(meta)
         _set(song_id, title=track or meta["title"], duration=meta["duration"], artist=artist or meta.get("uploader"))
-        _set(song_id, stage="chords")
+        _stage(song_id, "chords")
         wav = decode(song_dir)
         analyze(wav, song_dir / "cache" / "chords.json")
-        _set(song_id, stage="lyrics")
+        _stage(song_id, "lyrics")
         lyrics = fetch_lyrics(song_dir, wav, meta)
         if (match := lyrics.get("match")) and " - " not in match["trackName"]:
             _set(song_id, title=match["trackName"], artist=match["artistName"])
-        _set(song_id, stage="chart")
+        _stage(song_id, "chart")
         build_draft(song_id)
-        _set(song_id, status=SongStatus.done, stage=None)
+        _stage(song_id, None)
+        _set(song_id, status=SongStatus.done)
     except Exception as exc:  # report any failure to the user
         _set(song_id, status=SongStatus.failed, error=f"{type(exc).__name__}: {exc}"[:2000])
         raise

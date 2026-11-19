@@ -142,7 +142,10 @@ def _analysis(song: Song) -> dict | None:
     path = get_settings().songs_dir / song.youtube_id / "cache" / "chords.json"
     if song.status != SongStatus.done or not path.exists():
         return None
-    data = json.loads(path.read_text())
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
     capo = data["capo"]
     shapes = [chord_name(transpose(tuple(s["chord"]), -capo)) if s["chord"] else "N.C." for s in data["segments"]]
     timeline = [{"t": f"{int(s['start'] // 60)}:{int(s['start'] % 60):02d}", "shape": sh}

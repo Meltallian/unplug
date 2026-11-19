@@ -5,6 +5,7 @@ Writes cache/chords.json. Results are cached per VERSION, so changing the method
 """
 
 import json
+import os
 from pathlib import Path
 
 import librosa
@@ -30,9 +31,12 @@ def _templates() -> np.ndarray:
 
 def analyze(wav: Path, out: Path) -> dict:
     if out.exists():
-        cached = json.loads(out.read_text())
-        if cached.get("version") == VERSION:
-            return cached
+        try:
+            cached = json.loads(out.read_text())
+            if cached.get("version") == VERSION:
+                return cached
+        except (json.JSONDecodeError, OSError):
+            pass  # corrupt cache: recompute
 
     y, sr = librosa.load(wav, sr=None, mono=True)
     tuning = float(librosa.estimate_tuning(y=y, sr=sr))  # fraction of a semitone
@@ -87,7 +91,9 @@ def analyze(wav: Path, out: Path) -> dict:
         ],
     }
     out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps(result, indent=1))
+    tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(result, indent=1))
+    tmp.replace(out)
     return result
 
 

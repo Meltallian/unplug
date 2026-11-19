@@ -6,6 +6,7 @@ Scores are tolerant because the reference sheets are hand-made (see the spec):
   roots    Jaccard overlap of chord roots (sheet vs detected, ignoring major/minor)
   chords   Jaccard overlap of chords (root + major/minor)
   trans    F1 of chord-to-chord transitions (order-aware, start-agnostic)
+  *@s      key / chords / trans again after moving the sheet by `shift`
 Reference-free checks (also for songs without a sheet):
   inkey    share of time on chords that fit the detected key
   short    share of chord changes lasting under 2 beats
@@ -94,13 +95,27 @@ def score_song(fixture: Path, songs_dir: Path) -> dict:
         "roots": _jaccard({c[0] for c in ref_chords}, {c[0] for c in det_chords}),
         "chords": chord_score(0),
         "trans": _f1(_transitions(ref_seq), _transitions(det_seq)),
+        # same scores after moving the sheet by `shift` (sheet written in another key than the record)
+        "chords@s": chord_score(shift),
+        "trans@s": _f1(_transitions([transpose(c, shift) for c in ref_seq]), _transitions(det_seq)),
+        "key@s": "exact" if (ref_key[0] + shift) % 12 == det_key[0] and ref_key[1] == det_key[1]
+                 else ("rel" if same_scale(((ref_key[0] + shift) % 12, ref_key[1]), det_key) else "off"),
         "sheet": " ".join(chord_name(c) for c in sorted(ref_chords)),
     })
     return row
 
 
-COLUMNS = ["key_match", "shift", "roots", "chords", "trans", "inkey", "short", "chg/min"]
-SUMMED = ["roots", "chords", "trans", "inkey", "short"]
+COLUMNS = ["key_match", "shift", "roots", "chords", "trans", "key@s", "chords@s", "trans@s", "inkey", "short", "chg/min"]
+SUMMED = ["roots", "chords", "trans", "chords@s", "trans@s"]
+
+
+def _means(scored: list[dict], analysed: list[dict]) -> dict:
+    """Sheet scores average over songs with a sheet; reference-free checks over every song."""
+    means = {c: sum(r[c] for r in scored) / len(scored) for c in SUMMED if all(c in r for r in scored)} if scored else {}
+    for c in ("inkey", "short"):
+        if analysed:
+            means[c] = sum(r[c] for r in analysed) / len(analysed)
+    return means
 
 
 def _fmt(v) -> str:
@@ -122,6 +137,9 @@ def main() -> int:
         row["secs"] = round(time.time() - t0, 1)
         rows.append(row)
 
+    if not rows:
+        print(f"no fixtures found in {fixtures_dir}")
+        return 1
     width = max(len(r["song"]) for r in rows) + 2
     print(f"\nchord stage: {VERSION}\n")
     print("song".ljust(width) + "key   sheet  " + "".join(c.rjust(10) for c in COLUMNS))
@@ -131,10 +149,9 @@ def main() -> int:
             continue
         print(r["song"].ljust(width) + r["key"].ljust(6) + r.get("sheet_key", "-").ljust(7)
               + "".join(_fmt(r.get(c, "-")).rjust(10) for c in COLUMNS))
-    scored = [r for r in rows if "chords" in r]
-    means = {c: sum(r[c] for r in scored) / len(scored) for c in SUMMED if scored} if scored else {}
-    means["inkey"] = sum(r["inkey"] for r in rows if "inkey" in r) / max(1, sum("inkey" in r for r in rows))
-    means["short"] = sum(r["short"] for r in rows if "short" in r) / max(1, sum("short" in r for r in rows))
+    scored = [r for r in rows if "chords" in r]          # songs with a sheet
+    analysed = [r for r in rows if "inkey" in r]         # every song that ran
+    means = _means(scored, analysed)
     print("\nmean (" + str(len(scored)) + " with sheets): " + "  ".join(f"{k}={v:.2f}" for k, v in means.items()))
     print("\ndetected vs sheet chords:")
     for r in scored:
@@ -146,8 +163,12 @@ def main() -> int:
     out.write_text(json.dumps({"version": VERSION, "rows": rows, "means": means}, indent=1))
     if previous:
         prev = json.loads(previous[-1].read_text())
-        print(f"\nchange vs {previous[-1].name}: " + "  ".join(
-            f"{k} {means[k] - prev['means'].get(k, 0):+.2f}" for k in means if k in prev["means"]))
+        shared = {r["song"] for r in rows} & {r["song"] for r in prev["rows"]}
+        now = _means([r for r in scored if r["song"] in shared], [r for r in analysed if r["song"] in shared])
+        before = _means([r for r in prev["rows"] if r["song"] in shared and "chords" in r],
+                        [r for r in prev["rows"] if r["song"] in shared and "inkey" in r])
+        print(f"\nchange vs {previous[-1].name} (over {len(shared)} shared songs): " + "  ".join(
+            f"{k} {now[k] - before[k]:+.2f}" for k in now if k in before))
     print(f"\nsaved {out}")
     return 0
 

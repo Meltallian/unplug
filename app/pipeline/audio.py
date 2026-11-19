@@ -1,6 +1,7 @@
-"""Stage 2: decode the stored audio to a mono wav for analysis (temporary, recreated on demand)."""
+"""Stage 2: decode the stored audio to a mono wav for analysis (a disposable cache, recreated on demand)."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -13,11 +14,11 @@ def decode(song_dir: Path) -> Path:
         return wav
     meta = json.loads((song_dir / "meta.json").read_text())
     wav.parent.mkdir(exist_ok=True)
-    tmp = wav.with_suffix(".tmp.wav")
+    tmp = wav.with_name(f"audio.{os.getpid()}.tmp.wav")
     subprocess.run(
         ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", str(song_dir / meta["audio_file"]),
          "-ac", "1", "-ar", str(SAMPLE_RATE), str(tmp)],
         check=True,
     )
-    tmp.rename(wav)
+    tmp.replace(wav)
     return wav

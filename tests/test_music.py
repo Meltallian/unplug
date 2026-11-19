@@ -48,3 +48,13 @@ def test_capo_for_barre_heavy_song():
     capo = choose_capo(bb)
     assert capo > 0
     assert transpose((10, "maj"), -capo) in [(7, "maj"), (9, "maj"), (2, "maj"), (0, "maj"), (4, "maj")]
+
+
+def test_corrupt_chord_cache_is_recomputed(tmp_path, monkeypatch):
+    from app.pipeline import chords
+    out = tmp_path / "chords.json"
+    out.write_text('{"version": "baseline-2", "seg')          # truncated by a crash
+    monkeypatch.setattr(chords.librosa, "load", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("recomputing")))
+    import pytest
+    with pytest.raises(RuntimeError, match="recomputing"):
+        chords.analyze(tmp_path / "x.wav", out)

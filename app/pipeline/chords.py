@@ -32,7 +32,7 @@ class Params:
 
 
 PARAMS = Params()
-VERSION = "bass-1"
+VERSION = "bass-1b"
 
 
 def _templates(p: Params) -> np.ndarray:
@@ -87,6 +87,13 @@ def features(wav: Path) -> dict:
     return feats
 
 
+def display_tempo(bpm: float) -> float:
+    """Beat trackers often lock onto double time; strummed songs rarely exceed ~135 bpm per beat."""
+    while bpm > 135:
+        bpm /= 2
+    return bpm
+
+
 def decode(feats: dict, p: Params = PARAMS) -> dict:
     chroma, bass, rms, times = feats["chroma"], feats["bass"], feats["rms"], feats["times"]
 
@@ -123,7 +130,7 @@ def decode(feats: dict, p: Params = PARAMS) -> dict:
         "version": VERSION,
         "params": asdict(p),
         "tuning_semitones": round(float(feats["tuning"]), 3),
-        "tempo": float(feats["tempo"]),
+        "tempo": display_tempo(float(feats["tempo"])),
         "key": {"tonic": key[0], "mode": key[1], "name": key_name(key)},
         "capo": choose_capo(weighted),
         "segments": [

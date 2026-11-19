@@ -33,7 +33,7 @@ STALE_AFTER = timedelta(minutes=30)
 
 @app.exception_handler(HTTPException)
 async def _friendly_errors(request: Request, exc: HTTPException):
-    if exc.status_code in (400, 404, 429) and "text/html" in request.headers.get("accept", ""):
+    if exc.status_code in (400, 404, 409, 429) and "text/html" in request.headers.get("accept", ""):
         return templates.TemplateResponse(request, "error.html", {"message": exc.detail, "user": None},
                                           status_code=exc.status_code)
     return await http_exception_handler(request, exc)
@@ -211,6 +211,8 @@ def paste_lyrics(song_id: int, lyrics: str = Form(...), user: CurrentUser = Depe
     song = _song_for_user(session, song_id, user)
     if song.status != SongStatus.done:
         raise HTTPException(400, "Wait until the song has finished processing.")
+    if _lyrics_info(song).get("source") not in ("none", "pasted"):
+        raise HTTPException(409, "This song already has lyrics from LRCLIB.")
     if len(lyrics) > 50_000 or not lyrics.strip():
         raise HTTPException(400, "Paste the song's lyrics (one line per sung line).")
     save_lyrics(_song_files(song) / "cache" / "lyrics.json",

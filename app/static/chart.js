@@ -73,9 +73,17 @@
     document.getElementById("diagrams").innerHTML = used
       .map((k) => `<div class="diagram">${diagram(k)}${k}</div>`).join("");
     const key = chartKey ? moveChord(chartKey, state.key) : "";
-    document.getElementById("facts").innerHTML =
-      (key ? `Key <b>${key}</b> · ` : "") + (state.capo ? `Capo <b>${state.capo}</b>` : "<b>No capo</b>") +
-      (tempo ? ` · ${tempo} bpm` : "") + (state.key ? ` · transposed ${state.key > 0 ? "+" : ""}${state.key}` : "");
+    const facts = document.getElementById("facts");
+    facts.replaceChildren();
+    const add = (text, bold) => {
+      const el = bold ? document.createElement("b") : document.createTextNode("");
+      el.textContent = text;
+      facts.append(el);
+    };
+    if (key) { add("Key "); add(key, true); add(" · "); }
+    if (state.capo) { add("Capo "); add(String(state.capo), true); } else add("No capo", true);
+    if (tempo) add(` · ${tempo} bpm`);
+    if (state.key) add(` · transposed ${state.key > 0 ? "+" : ""}${state.key}`);
     document.getElementById("capo-label").textContent = "Capo " + state.capo;
     document.getElementById("key-label").textContent = state.key ? (state.key > 0 ? "+" : "") + state.key : "Key";
     document.documentElement.style.setProperty("--chart-size", state.size + "px");

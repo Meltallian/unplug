@@ -31,7 +31,10 @@ def build_draft(song_id: int) -> None:
         song = s.get(Song, song_id)
         song_dir = settings.songs_dir / song.youtube_id
         meta = json.loads((song_dir / "meta.json").read_text())
-        analysis = json.loads((song_dir / "cache" / "chords.json").read_text())
+        chords_path = song_dir / "cache" / "chords.json"
+        if not chords_path.exists():
+            return
+        analysis = json.loads(chords_path.read_text())
         lyrics_path = song_dir / "cache" / "lyrics.json"
         lyrics = json.loads(lyrics_path.read_text()) if lyrics_path.exists() else {"lines": []}
         text = build_chordpro(title=song.title or meta["title"], artist=song.artist or "",

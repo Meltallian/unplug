@@ -127,3 +127,11 @@ def test_paste_lyrics_rebuilds_draft(client, tmp_path, monkeypatch):
     client.post(url + "/lyrics", data={"lyrics": "first line\nsecond line"})
     page = client.get(url).text
     assert "first line" in page and "No lyrics found" not in page
+
+
+def test_paste_refused_when_lrclib_lyrics_exist(client, tmp_path, monkeypatch):
+    import json
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)
+    (tmp_path / "songs" / "_K6KyS3vxkc" / "cache" / "lyrics.json").write_text(
+        json.dumps({"source": "lrclib", "synced": True, "lines": [{"t": 1.0, "text": "real"}]}))
+    assert client.post(url + "/lyrics", data={"lyrics": "vandal"}).status_code == 409

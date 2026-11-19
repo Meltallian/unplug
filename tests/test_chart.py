@@ -94,3 +94,17 @@ def test_carried_chord_not_repeated():
     lyrics = {"lines": [{"t": 1.0, "text": "one"}, {"t": 4.0, "text": "two"}]}
     text = build_chordpro(title="T", artist="", analysis=ANALYSIS, segments=segs, lyrics=lyrics, duration=20)
     assert "[Am]one" in text and "\ntwo" in text
+
+
+def test_plain_lines_drop_section_headers():
+    from app.pipeline.lyrics import plain_lines
+    assert [x["text"] for x in plain_lines("[Verse 1]\nhello\n(x2)\n[Chorus]\nworld [yeah]")] == ["hello", "world (yeah)"]
+
+
+def test_lyrics_failure_does_not_fail(tmp_path, monkeypatch):
+    import json
+    from app.pipeline import lyrics
+    monkeypatch.setattr(lyrics, "search_lrclib", lambda *a: (_ for _ in ()).throw(ValueError("html page")))
+    (tmp_path / "cache").mkdir()
+    out = lyrics.fetch_lyrics(tmp_path, tmp_path / "a.wav", {"title": "A - B", "duration": 10})
+    assert out["source"] == "none" and "error" in out

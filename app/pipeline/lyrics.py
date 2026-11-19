@@ -48,7 +48,14 @@ def parse_lrc(text: str) -> list[dict]:
 
 
 def plain_lines(text: str) -> list[dict]:
-    return [{"t": None, "text": line.strip()} for line in text.strip().splitlines()]
+    """Plain lyrics; section headers like [Chorus] and stray brackets are dropped."""
+    lines = []
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if re.fullmatch(r"\[[^\]]*\]|\([^)]*\)", line):
+            continue
+        lines.append({"t": None, "text": line.replace("[", "(").replace("]", ")")})
+    return lines
 
 
 def _variants(s: str) -> set[str]:
@@ -156,7 +163,7 @@ def fetch_lyrics(song_dir: Path, wav: Path, meta: dict) -> dict:
     try:
         with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=20) as client:
             match = search_lrclib(artist, track, meta.get("duration"), client)
-    except httpx.HTTPError as exc:
+    except Exception as exc:  # lyrics are optional: never fail the song over them
         result["error"] = f"LRCLIB: {type(exc).__name__}"
         match = None
     if match:
@@ -164,8 +171,11 @@ def fetch_lyrics(song_dir: Path, wav: Path, meta: dict) -> dict:
         lines = parse_lrc(match["syncedLyrics"]) if synced else plain_lines(match.get("plainLyrics") or "")
         offset = 0.0
         if synced:
-            act, hop_s = vocal_activity(wav)
-            offset = estimate_offset(lines, act, hop_s, meta.get("duration") or 0, match.get("duration"))
+            try:
+                act, hop_s = vocal_activity(wav)
+                offset = estimate_offset(lines, act, hop_s, meta.get("duration") or 0, match.get("duration"))
+            except Exception:
+                offset = 0.0
         result = {"source": "lrclib", "synced": synced, "lines": lines, "offset": offset,
                   "query": [artist, track],
                   "match": {k: match.get(k) for k in ("id", "artistName", "trackName", "albumName", "duration")}}

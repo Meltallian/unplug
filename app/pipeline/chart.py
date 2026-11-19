@@ -180,7 +180,8 @@ def parse_chordpro(text: str) -> dict:
         if m := _DIRECTIVE.match(line.strip()):
             name, value = m.group(1).lower(), (m.group(2) or "")
             if name in ("c", "comment", "section", "start_of_verse", "start_of_chorus", "sov", "soc"):
-                sections.append({"name": value or name, "lines": []})
+                default = {"start_of_chorus": "Chorus", "soc": "Chorus", "start_of_verse": "Verse", "sov": "Verse"}
+                sections.append({"name": value or default.get(name, ""), "lines": []})
             else:
                 meta[name] = value
             continue

@@ -190,6 +190,37 @@ def save_edit(song_id: int, chordpro: str = Form(...), user: CurrentUser = Depen
     return RedirectResponse(f"/songs/{song_id}", status_code=303)
 
 
+@app.post("/songs/{song_id}/chord")
+def change_chord(song_id: int, index: int = Form(...), chord: str = Form(""), expected: str = Form(...),
+                 user: CurrentUser = Depends(current_user), session: Session = Depends(get_session)):
+    """Tap-to-edit: change or remove one chord. Works on the user's own copy (created on first edit)."""
+    from fastapi.responses import Response
+
+    from app.pipeline.chart import CHORD_SYMBOL, replace_chord
+
+    song = _song_for_user(session, song_id, user)
+    chart, own = _chart_for(session, song, user)
+    if chart is None:
+        raise HTTPException(404)
+    chord = chord.strip()
+    if chord and not CHORD_SYMBOL.fullmatch(chord):
+        raise HTTPException(400, "That doesn't look like a chord.")
+    try:
+        text = replace_chord(chart.chordpro, index, chord or None, expected=expected.strip())
+    except (IndexError, ValueError):
+        raise HTTPException(409, "The chart changed; reload the page.")
+    if own:
+        chart.chordpro = text
+    else:
+        session.add(Chart(song_id=song.id, user_id=user.id, chordpro=text))
+    try:
+        session.commit()
+    except IntegrityError:  # two first edits at once: the other one won
+        session.rollback()
+        raise HTTPException(409, "The chart changed; reload the page.")
+    return Response(status_code=204)
+
+
 @app.post("/songs/{song_id}/reset")
 def reset_edit(song_id: int, user: CurrentUser = Depends(current_user),
                session: Session = Depends(get_session)):

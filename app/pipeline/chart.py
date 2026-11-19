@@ -165,6 +165,38 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
     return "\n".join(out) + "\n"
 
 
+# --- editing one chord in place ---------------------------------------------------------------
+
+CHORD_SYMBOL = re.compile(r"^[A-G][#b]?[A-Za-z0-9#b+()]{0,8}(/[A-G][#b]?)?$")
+
+
+def replace_chord(text: str, index: int, new: str | None, expected: str | None = None) -> str:
+    """Replace (or with new=None remove) the index-th inline chord, counting exactly like the chart
+    page numbers them: directive lines are skipped and empty brackets "[ ]" are not chords.
+    With `expected`, refuse (ValueError) if that chord isn't the one currently at `index`."""
+    out, count = [], 0
+    for line in text.splitlines(keepends=True):
+        if _DIRECTIVE.match(line.strip()):
+            out.append(line)
+            continue
+
+        def swap(m: re.Match) -> str:
+            nonlocal count
+            if not m.group(1).strip():
+                return m.group(0)
+            hit = count == index
+            count += 1
+            if not hit:
+                return m.group(0)
+            if expected is not None and m.group(1).strip() != expected:
+                raise ValueError("chart changed")
+            return "" if new is None else f"[{new}]"
+        out.append(_INLINE.sub(swap, line))
+    if index >= count:
+        raise IndexError(index)
+    return "".join(out)
+
+
 # --- reading ChordPro back (for the chart view) --------------------------------------------------
 
 _DIRECTIVE = re.compile(r"^\{\s*([a-zA-Z_]+)\s*(?::\s*(.*?))?\s*\}$")

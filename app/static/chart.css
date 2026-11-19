@@ -52,3 +52,15 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); fon
   .toolbar button { min-width: 32px; font-size: 14px; }
   .toolbar span { min-width: 36px; font-size: .7rem; }
 }
+.ch[data-i] { cursor: pointer; border-radius: 4px; }
+.ch[data-i]:active, .ch.editing { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.picker { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.35); display: flex; align-items: flex-end; }
+.picker[hidden] { display: none; }
+.picker-card { width: 100%; background: var(--card); border-radius: 16px 16px 0 0; padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); }
+.picker-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; font-weight: 700; }
+.picker-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.picker-options button { background: transparent; color: var(--fg); border: 1px solid var(--line); padding: 12px 0; font-weight: 700; }
+.picker-options button.current { border-color: var(--accent); color: var(--accent); }
+.picker-custom { display: flex; gap: 8px; margin-bottom: 12px; }
+.picker-custom input { flex: 1; min-width: 0; padding: 10px; font-size: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+.danger { color: #c0392b !important; }

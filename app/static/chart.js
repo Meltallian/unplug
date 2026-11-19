@@ -112,7 +112,95 @@
   }
   sheet.addEventListener("click", (e) => {
     if (e.target.closest("a, button, form, textarea")) return;
-    if (scrolling) setScrolling(false);
+    if (scrolling) { setScrolling(false); return; }   // while scrolling, a tap only pauses
+    const ch = e.target.closest(".ch[data-i]");
+    if (ch) openPicker(ch);
+  });
+
+  // --- tap a chord to change it ----------------------------------------------------------------
+  const picker = document.getElementById("picker");
+  const options = document.getElementById("picker-options");
+  let editing = null;
+
+  function semis() { return chartCapo + state.key - state.capo; }
+
+  function candidates(shown) {
+    // chords that fit the key (as shapes for the current capo), plus major/minor and relative swaps
+    const out = [shown];
+    const m = CHORD.exec(shown);
+    if (m) {
+      const root = pc(m[1], m[2]);
+      const minor = /^(m(?!aj)|min|-)/.test(m[3]);
+      out.push(NAMES[root] + (minor ? "" : "m"));
+      out.push(minor ? NAMES[(root + 3) % 12] : NAMES[(root + 9) % 12] + "m");
+    }
+    const key = chartKey ? moveChord(chartKey, state.key - state.capo) : "";
+    const k = CHORD.exec(key);
+    if (k) {
+      const t = pc(k[1], k[2]);
+      const minorKey = /^m(?!aj)/.test(k[3]);
+      const degrees = minorKey ? [[0, "m"], [3, ""], [5, "m"], [7, "m"], [8, ""], [10, ""], [7, ""]]
+                               : [[0, ""], [2, "m"], [4, "m"], [5, ""], [7, ""], [9, "m"]];
+      degrees.forEach(([d, q]) => out.push(NAMES[(t + d) % 12] + q));
+    }
+    return [...new Set(out)].slice(0, 12);
+  }
+
+  function openPicker(ch) {
+    editing = ch;
+    ch.classList.add("editing");
+    const shown = ch.textContent.trim();
+    document.getElementById("picker-title").textContent = "Change " + shown;
+    options.replaceChildren(...candidates(shown).map((name) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = name; b.dataset.pick = name;
+      if (name === shown) b.classList.add("current");
+      return b;
+    }));
+    picker.hidden = false;
+  }
+
+  function closePicker() {
+    picker.hidden = true;
+    if (editing) editing.classList.remove("editing");
+    editing = null;
+  }
+
+  async function save(shownName) {
+    const el = editing;
+    const chartName = shownName ? moveChord(shownName, -semis()) : "";
+    const removed = parseInt(el.dataset.i, 10);
+    const body = new URLSearchParams({ index: removed, chord: chartName, expected: el.dataset.c });
+    const r = await fetch(`/songs/${sheet.dataset.song}/chord`, { method: "POST", body });
+    if (!r.ok) {
+      let msg = "Couldn't save that chord.";
+      try { msg = (await r.json()).detail || msg; } catch (e) { /* not JSON */ }
+      alert(msg);
+      return;
+    }
+    if (chartName) el.dataset.c = chartName;
+    else {
+      // the server's chord numbering shifts down by one after a removal: mirror it here
+      el.removeAttribute("data-c"); el.removeAttribute("data-i"); el.classList.add("empty"); el.textContent = "";
+      document.querySelectorAll(".ch[data-i]").forEach((c) => {
+        const i = parseInt(c.dataset.i, 10);
+        if (i > removed) c.dataset.i = i - 1;
+      });
+    }
+    closePicker();
+    render();
+  }
+
+  picker.addEventListener("click", (e) => {
+    if (e.target === picker || e.target.closest("[data-pick-close]")) return closePicker();
+    const pick = e.target.closest("[data-pick]");
+    if (pick) return save(pick.dataset.pick);
+    if (e.target.closest("[data-pick-remove]")) return save("");
+  });
+  document.getElementById("picker-custom").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = e.target.c.value.trim();
+    if (v) save(v);
   });
 
   // --- toolbar -------------------------------------------------------------------------------
@@ -136,17 +224,20 @@
   // --- collapse the diagrams while scrolling down --------------------------------------------
   // Folding changes the header height, which itself moves the page: ignore scroll events
   // for a moment after each fold so it doesn't flicker open/closed.
-  let lastY = window.scrollY, quietUntil = 0;
+  let lastY = window.scrollY, quietUntil = 0, travel = 0;
   function fold(collapsed) {
     if (head.classList.contains("collapsed") === collapsed) return;
     head.classList.toggle("collapsed", collapsed);
     quietUntil = performance.now() + 350;
   }
   window.addEventListener("scroll", () => {
-    const y = window.scrollY;
+    const y = window.scrollY, dy = y - lastY;
+    // add up movement since the last change of direction, so slow scrolling
+    // (auto-scroll moves less than a pixel per frame) still folds/unfolds
+    travel = (Math.sign(dy) === Math.sign(travel)) ? travel + dy : dy;
     if (performance.now() > quietUntil) {
-      if (y > lastY + 6 && y > 80) fold(true);
-      else if (y < lastY - 12 || y < 20) fold(false);
+      if ((travel > 24 || scrolling) && y > 80) fold(true);
+      else if (travel < -40 || y < 20) fold(false);
     }
     lastY = y;
   }, { passive: true });

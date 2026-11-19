@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<form class="add" method="post" action="/songs">
+  <input type="text" name="link" placeholder="Paste a YouTube link" required inputmode="url" autocomplete="off">
+  <button>Add</button>
+</form>
+<form class="add" method="get" action="/">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search your songs">
+</form>
+{% if entries %}
+<ul class="songs">
+  {% for e in entries %}
+  <li><a href="/songs/{{ e.song.id }}">
+    {{ e.song.title or "Processing…" }}
+    {% if e.song.status.value != "done" %}<span class="badge {{ e.song.status.value }}">{{ e.song.status.value }}</span>{% endif %}
+    {% if e.song.artist %}<div class="muted">{{ e.song.artist }}</div>{% endif %}
+  </a></li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">{% if q %}No songs match “{{ q }}”.{% else %}No songs yet. Paste a YouTube link above.{% endif %}</p>
+{% endif %}
+{% endblock %}

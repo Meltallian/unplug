@@ -369,7 +369,7 @@ def _fixture_ids() -> set[str]:
     for src in (get_settings().data_dir / "fixtures").glob("*/source.json"):
         try:
             ids.add(parse_youtube_id(json.loads(src.read_text())["youtube_url"]))
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, TypeError):
             continue
     return ids
 
@@ -388,10 +388,11 @@ def delete_song(song_id: int, user: CurrentUser = Depends(current_user),
     if song.status in PENDING and song.updated_at > datetime.now(timezone.utc) - STALE_AFTER:
         raise HTTPException(409, "This song is being processed; try again when it has finished.")
     youtube_id = song.youtube_id
+    keep_audio = youtube_id in _fixture_ids()   # decided before anything is deleted
     session.execute(delete(LibraryEntry).where(LibraryEntry.song_id == song_id))
     session.execute(delete(Chart).where(Chart.song_id == song_id))
     session.delete(song)
     session.commit()
-    if youtube_id not in _fixture_ids():
+    if not keep_audio:
         shutil.rmtree(get_settings().songs_dir / youtube_id, ignore_errors=True)
     return RedirectResponse("/", status_code=303)

@@ -89,7 +89,7 @@ def features(wav: Path) -> dict:
 
 def display_tempo(bpm: float) -> float:
     """Beat trackers often lock onto double time; strummed songs rarely exceed ~135 bpm per beat."""
-    while bpm > 135:
+    while 135 < bpm < 10_000:
         bpm /= 2
     return bpm
 

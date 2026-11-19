@@ -211,17 +211,20 @@
   // --- collapse the diagrams while scrolling down --------------------------------------------
   // Folding changes the header height, which itself moves the page: ignore scroll events
   // for a moment after each fold so it doesn't flicker open/closed.
-  let lastY = window.scrollY, quietUntil = 0;
+  let lastY = window.scrollY, quietUntil = 0, travel = 0;
   function fold(collapsed) {
     if (head.classList.contains("collapsed") === collapsed) return;
     head.classList.toggle("collapsed", collapsed);
     quietUntil = performance.now() + 350;
   }
   window.addEventListener("scroll", () => {
-    const y = window.scrollY;
+    const y = window.scrollY, dy = y - lastY;
+    // add up movement since the last change of direction, so slow scrolling
+    // (auto-scroll moves less than a pixel per frame) still folds/unfolds
+    travel = (Math.sign(dy) === Math.sign(travel)) ? travel + dy : dy;
     if (performance.now() > quietUntil) {
-      if (y > lastY + 6 && y > 80) fold(true);
-      else if (y < lastY - 12 || y < 20) fold(false);
+      if ((travel > 24 || scrolling) && y > 80) fold(true);
+      else if (travel < -40 || y < 20) fold(false);
     }
     lastY = y;
   }, { passive: true });

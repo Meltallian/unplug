@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -38,6 +38,9 @@ class Song(Base):
         Enum(SongStatus, native_enum=False, length=20), default=SongStatus.queued)
     queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     stage: Mapped[str | None] = mapped_column(String(50))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))        # processing began
+    stage_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # current stage began
+    timings: Mapped[dict | None] = mapped_column(JSON)   # seconds per stage of the last run
     error: Mapped[str | None] = mapped_column(Text)
     submitted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

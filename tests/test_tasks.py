@@ -23,3 +23,20 @@ def test_task_claims_job_only_once(client, monkeypatch):
 def test_tests_do_not_use_real_data():
     from app.config import get_settings
     assert "unplug-test-" in str(get_settings().data_dir)
+
+
+def test_interrupted_songs_are_requeued(client, monkeypatch):
+    from app import tasks
+    from app.db import SessionLocal
+    from app.models import Song, SongStatus
+    sent = []
+    monkeypatch.setattr(tasks.process_song, "delay", sent.append)
+    client.post("/songs", data={"link": "_K6KyS3vxkc"})
+    with SessionLocal() as s:
+        song = s.query(Song).one()
+        song.status, song.stage = SongStatus.processing, "chords"
+        s.commit()
+        sid = song.id
+    assert tasks.recover_interrupted() == [sid] and sent == [sid]
+    with SessionLocal() as s:
+        assert s.get(Song, sid).status == SongStatus.queued

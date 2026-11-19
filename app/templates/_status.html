@@ -1,8 +1,13 @@
-<div id="status" {% if song.status.value in ("queued", "processing") %}hx-get="/songs/{{ song.id }}/status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+<div id="status" {% if song.status.value in ("queued", "processing") %}hx-get="/songs/{{ song.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
   {% if song.status.value == "queued" %}
-    <p>Waiting in queue{% if pos %} — position {{ pos }}{% endif %}…</p>
+    <p>Waiting in queue{% if pos %} — position {{ pos }}{% endif %}{% if wait %}, starts in about {{ fmt(wait) }}{% endif %}…</p>
+  {% elif song.status.value == "processing" and prog %}
+    <p><strong>{{ prog.label }}</strong>{% if prog.step %} <span class="muted">(step {{ prog.step }} of {{ prog.steps }})</span>{% endif %}</p>
+    <div class="bar"><div style="width: {{ [100, (100 * prog.elapsed / prog.expected) | round] | min if prog.expected else 10 }}%"></div></div>
+    <p class="muted">{{ fmt(prog.elapsed) }} so far{% if prog.expected %}, usually about {{ fmt(prog.expected) }}{% endif %} ·
+      {% if prog.expected and prog.elapsed > prog.expected * 1.3 %}taking longer than usual{% else %}about {{ fmt(prog.left) }} left in total{% endif %}</p>
   {% elif song.status.value == "processing" %}
-    <p>Processing{% if song.stage %}: {{ song.stage }}{% endif %}…</p>
+    <p>Processing…</p>
   {% elif song.status.value == "failed" %}
     <p class="error">Failed: {{ song.error }}</p>
   {% else %}

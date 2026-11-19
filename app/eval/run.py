@@ -47,13 +47,16 @@ def _f1(ref: set, hyp: set) -> float:
     return 2 * tp / (len(ref) + len(hyp))
 
 
-def score_song(fixture: Path, songs_dir: Path, params=None) -> dict:
+def score_song(fixture: Path, songs_dir: Path, params=None, source: str = "audio") -> dict:
     src = json.loads((fixture / "source.json").read_text())
     youtube_id = parse_youtube_id(src["youtube_url"])
     song_dir = songs_dir / youtube_id
     if not (song_dir / "meta.json").exists():
         return {"song": src["song"], "error": "audio not downloaded"}
-    result = analyze(decode(song_dir), song_dir / "cache" / "chords.json", params)
+    wav = decode(song_dir) if source == "audio" else song_dir / "cache" / f"{source}.wav"
+    if not wav.exists():
+        return {"song": src["song"], "error": f"no {wav.name}"}
+    result = analyze(wav, song_dir / "cache" / "chords.json", params, cache=(source == "audio"))
     raw = load_segments(result)
     # Score what the chart shows: very short chords are merged away there, so they are here too.
     shown = _clean_segments(raw)
@@ -139,9 +142,12 @@ def _parse_overrides(argv: list[str]) -> dict[str, float]:
 
 def main() -> int:
     settings = get_settings()
-    overrides = _parse_overrides(sys.argv[1:])
+    source = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("source=")), "audio")
+    overrides = _parse_overrides([a for a in sys.argv[1:] if not a.startswith("source=")])
     params = with_overrides(overrides) if overrides else None
     label = VERSION + ("+" + ",".join(f"{k}={v:g}" for k, v in overrides.items()) if overrides else "")
+    if source != "audio":
+        label += f" [source={source}]"
     fixtures_dir = settings.data_dir / "fixtures"
     runs_dir = settings.data_dir / "eval"
     runs_dir.mkdir(exist_ok=True)
@@ -149,7 +155,7 @@ def main() -> int:
     rows = []
     for fixture in sorted(p for p in fixtures_dir.iterdir() if (p / "source.json").exists()):
         t0 = time.time()
-        row = score_song(fixture, settings.songs_dir, params)
+        row = score_song(fixture, settings.songs_dir, params, source)
         row["secs"] = round(time.time() - t0, 1)
         rows.append(row)
 
@@ -188,7 +194,7 @@ def main() -> int:
             moved = [f"{r['song'][:14]} {r[metric] - per_song[r['song']].get(metric, 0):+.2f}"
                      for r in scored if r["song"] in per_song and metric in per_song[r["song"]]]
             print(f"per song ({metric}): " + ", ".join(moved))
-    if overrides:   # experiments are printed, not saved as runs
+    if overrides or source != "audio":   # experiments are printed, not saved as runs
         return 0
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = runs_dir / f"{stamp}-{VERSION}.json"

@@ -45,7 +45,8 @@ def _templates(p: Params) -> np.ndarray:
 
 def features(wav: Path) -> dict:
     """Beat-synchronous chroma, bass chroma and loudness. Cached next to the wav."""
-    cache = wav.parent / f"features-{FEATURES_VERSION}.npz"
+    suffix = "" if wav.stem == "audio" else f"-{wav.stem}"   # e.g. separated audio: sep.wav
+    cache = wav.parent / f"features-{FEATURES_VERSION}{suffix}.npz"
     if cache.exists():
         try:
             with np.load(cache) as z:
@@ -133,9 +134,10 @@ def decode(feats: dict, p: Params = PARAMS) -> dict:
     }
 
 
-def analyze(wav: Path, out: Path, params: Params | None = None) -> dict:
-    """Chords for a song. With explicit params (experiments) the result is returned but not cached."""
-    if params is None and out.exists():
+def analyze(wav: Path, out: Path, params: Params | None = None, cache: bool = True) -> dict:
+    """Chords for a song. With explicit params or cache=False (experiments) nothing is cached."""
+    cache = cache and params is None
+    if cache and out.exists():
         try:
             cached = json.loads(out.read_text())
             if cached.get("version") == VERSION and cached.get("params") == asdict(PARAMS):
@@ -143,7 +145,7 @@ def analyze(wav: Path, out: Path, params: Params | None = None) -> dict:
         except (json.JSONDecodeError, OSError):
             pass  # corrupt cache: recompute
     result = decode(features(wav), params or PARAMS)
-    if params is None:
+    if cache:
         out.parent.mkdir(exist_ok=True)
         tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(result, indent=1))

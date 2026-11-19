@@ -87,6 +87,7 @@
     document.getElementById("capo-label").textContent = "Capo " + state.capo;
     document.getElementById("key-label").textContent = state.key ? (state.key > 0 ? "+" : "") + state.key : "Key";
     document.documentElement.style.setProperty("--chart-size", state.size + "px");
+    document.getElementById("pdf-link").href = `/songs/${sheet.dataset.song}/pdf?capo=${state.capo}&key=${state.key}`;
   }
 
   // --- auto-scroll ---------------------------------------------------------------------------

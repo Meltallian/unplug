@@ -15,6 +15,7 @@
       <div class="song-title">{{ chart.meta.get("title") or song.title }}</div>
       <div class="muted">{{ chart.meta.get("artist") or song.artist or "" }}</div>
     </div>
+    <a class="edit" id="pdf-link" href="/songs/{{ song.id }}/pdf">PDF</a>
     <a class="edit" href="/songs/{{ song.id }}/edit">Edit</a>
   </div>
   <div class="facts" id="facts"></div>

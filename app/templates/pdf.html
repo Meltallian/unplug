@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  @page { size: A4; margin: 14mm 14mm 16mm; @bottom-center { content: counter(page) " / " counter(pages); font-size: 8pt; color: #888; } }
+  body { font-family: "DejaVu Sans", sans-serif; font-size: 10.5pt; color: #1d1d1b; }
+  h1 { font-size: 16pt; margin: 0; }
+  .artist { color: #666; margin: 1mm 0 2mm; }
+  .facts { font-size: 9.5pt; margin-bottom: 3mm; }
+  .diagrams { display: flex; flex-wrap: wrap; gap: 3mm; margin-bottom: 4mm; padding-bottom: 3mm; border-bottom: 0.5pt solid #ccc; }
+  .diagram { text-align: center; font-weight: bold; font-size: 9pt; }
+  .cols { column-count: 2; column-gap: 8mm; }
+  section { margin-bottom: 3.5mm; }
+  h2 { break-after: avoid; }
+  .line { break-inside: avoid; }
+  h2 { font-size: 9pt; color: #777; font-weight: normal; margin: 0 0 1mm; }
+  .line { display: flex; flex-wrap: wrap; align-items: flex-end; margin-bottom: 1.2mm; }
+  .seg { display: inline-flex; flex-direction: column; white-space: pre-wrap; }
+  .ch { color: #b4441c; font-weight: bold; min-height: 1.15em; padding-right: 1.2mm; }
+  .chords-only .tx { display: none; }
+  .chords-only .ch { padding-right: 3mm; }
+  .foot { margin-top: 4mm; font-size: 7.5pt; color: #999; }
+</style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  {% if artist %}<div class="artist">{{ artist }}</div>{% endif %}
+  <div class="facts">{% if key %}Key <b>{{ key }}</b> · {% endif %}{% if capo %}Capo <b>{{ capo }}</b>{% else %}<b>No capo</b>{% endif %}{% if tempo %} · {{ tempo }} bpm{% endif %}</div>
+  <div class="diagrams">{% for name, svg in diagrams %}<div class="diagram">{{ svg | safe }}<div>{{ name }}</div></div>{% endfor %}</div>
+  <div class="cols">
+  {% for section in sections %}
+    <section>
+      {% if section.name %}<h2>[{{ section.name }}]</h2>{% endif %}
+      {% for line in section.lines %}
+      <div class="line{% if line | selectattr(1) | map(attribute=1) | join | trim == '' %} chords-only{% endif %}">{% for chord, text in line %}<span class="seg"><b class="ch">{{ chord or "" }}</b><span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
+      {% endfor %}
+    </section>
+  {% endfor %}
+  </div>
+  <div class="foot">unplug · automatic chart, private use</div>
+</body>
+</html>

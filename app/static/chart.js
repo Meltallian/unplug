@@ -169,11 +169,24 @@
   async function save(shownName) {
     const el = editing;
     const chartName = shownName ? moveChord(shownName, -semis()) : "";
-    const body = new URLSearchParams({ index: el.dataset.i, chord: chartName });
+    const removed = parseInt(el.dataset.i, 10);
+    const body = new URLSearchParams({ index: removed, chord: chartName, expected: el.dataset.c });
     const r = await fetch(`/songs/${sheet.dataset.song}/chord`, { method: "POST", body });
-    if (!r.ok) { alert(r.status === 409 ? "The chart changed; reload the page." : "Couldn't save that chord."); return; }
+    if (!r.ok) {
+      let msg = "Couldn't save that chord.";
+      try { msg = (await r.json()).detail || msg; } catch (e) { /* not JSON */ }
+      alert(msg);
+      return;
+    }
     if (chartName) el.dataset.c = chartName;
-    else { el.removeAttribute("data-c"); el.classList.add("empty"); el.textContent = ""; }
+    else {
+      // the server's chord numbering shifts down by one after a removal: mirror it here
+      el.removeAttribute("data-c"); el.removeAttribute("data-i"); el.classList.add("empty"); el.textContent = "";
+      document.querySelectorAll(".ch[data-i]").forEach((c) => {
+        const i = parseInt(c.dataset.i, 10);
+        if (i > removed) c.dataset.i = i - 1;
+      });
+    }
     closePicker();
     render();
   }

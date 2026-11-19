@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ song.title or "Song" }} · unplug{% endblock %}
+{% block content %}
+<h1 style="font-size:1.3rem;margin:0 0 4px">{{ song.title or "New song" }}</h1>
+{% if song.artist %}<div class="muted">{{ song.artist }}</div>{% endif %}
+{% include "_status.html" %}
+<div class="actions">
+  <form method="post" action="/songs/{{ song.id }}/reprocess"><button class="secondary">Reprocess</button></form>
+  <form method="post" action="/songs/{{ song.id }}/remove" onsubmit="return confirm('Remove from your library?')"><button class="secondary">Remove</button></form>
+</div>
+{% endblock %}

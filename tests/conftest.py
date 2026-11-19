@@ -1,5 +1,8 @@
 import os
+import tempfile
 
+# Never touch real data: tests get their own empty data directory and database.
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="unplug-test-")
 os.environ["DATABASE_URL"] = "sqlite:////tmp/unplug-test.db"
 os.environ["DEV_USER_EMAIL"] = "tester@example.com"
 os.environ["ADMIN_EMAILS"] = "admin@example.com"

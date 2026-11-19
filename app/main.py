@@ -1,33 +1,40 @@
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import CurrentUser, current_user
 from app.config import Settings, get_settings
-from app.db import get_session, init_db
+from app.db import SessionLocal, get_session
 from app.models import LibraryEntry, Song, SongStatus
 from app.youtube import parse_youtube_id
 
 HERE = Path(__file__).parent
 
 
-@asynccontextmanager
-async def lifespan(_app):
-    init_db()
-    yield
-
-
-app = FastAPI(title="unplug", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+app = FastAPI(title="unplug", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 
 PENDING = (SongStatus.queued, SongStatus.processing)
+# A pending song with no update for this long is considered stuck and may be reprocessed.
+STALE_AFTER = timedelta(minutes=30)
+
+
+@app.exception_handler(HTTPException)
+async def _friendly_errors(request: Request, exc: HTTPException):
+    if exc.status_code in (400, 404, 429) and "text/html" in request.headers.get("accept", ""):
+        return templates.TemplateResponse(request, "error.html", {"message": exc.detail, "user": None},
+                                          status_code=exc.status_code)
+    return await http_exception_handler(request, exc)
 
 
 @app.get("/healthz")
@@ -35,10 +42,21 @@ def healthz() -> dict:
     return {"ok": True}
 
 
-def _enqueue(song_id: int) -> None:
+def _send_task(song_id: int) -> None:
     from app.tasks import process_song
 
     process_song.delay(song_id)
+
+
+def _enqueue(song_id: int) -> None:
+    """Send the job; if the broker is unreachable, mark the song failed so it can be retried."""
+    try:
+        _send_task(song_id)
+    except Exception as exc:
+        with SessionLocal() as s:
+            s.execute(update(Song).where(Song.id == song_id).values(
+                status=SongStatus.failed, error=f"Could not queue job: {type(exc).__name__}"))
+            s.commit()
 
 
 def _queue_position(session: Session, song: Song) -> int | None:
@@ -46,7 +64,7 @@ def _queue_position(session: Session, song: Song) -> int | None:
         return None
     ahead = session.scalar(
         select(func.count()).select_from(Song)
-        .where(Song.status.in_(PENDING), Song.created_at < song.created_at)
+        .where(Song.status == SongStatus.queued, Song.queued_at < song.queued_at)
     )
     return ahead + 1
 
@@ -78,13 +96,19 @@ def add_song(request: Request, link: str = Form(...), user: CurrentUser = Depend
             .where(Song.submitted_by_id == user.id, Song.status.in_(PENDING)))
         if pending >= settings.max_queued_per_user:
             raise HTTPException(429, f"You already have {pending} songs waiting. Try again when one finishes.")
-        song = Song(youtube_id=youtube_id, submitted_by_id=user.id)
-        session.add(song)
-        session.flush()
-    if not session.scalar(select(LibraryEntry).where(LibraryEntry.user_id == user.id,
-                                                     LibraryEntry.song_id == song.id)):
+        try:
+            song = Song(youtube_id=youtube_id, submitted_by_id=user.id)
+            session.add(song)
+            session.commit()
+        except IntegrityError:  # someone added the same video at the same moment
+            session.rollback()
+            new = False
+            song = session.scalar(select(Song).where(Song.youtube_id == youtube_id))
+    try:
         session.add(LibraryEntry(user_id=user.id, song_id=song.id))
-    session.commit()
+        session.commit()
+    except IntegrityError:  # already in this user's library
+        session.rollback()
     if new:
         _enqueue(song.id)
     return RedirectResponse(f"/songs/{song.id}", status_code=303)
@@ -118,12 +142,19 @@ def song_status(request: Request, song_id: int, user: CurrentUser = Depends(curr
 @app.post("/songs/{song_id}/reprocess")
 def reprocess(song_id: int, user: CurrentUser = Depends(current_user),
               session: Session = Depends(get_session)):
-    song = _song_for_user(session, song_id, user)
-    if song.status not in PENDING:
-        song.status, song.error, song.stage = SongStatus.queued, None, None
-        session.commit()
-        _enqueue(song.id)
-    return RedirectResponse(f"/songs/{song.id}", status_code=303)
+    _song_for_user(session, song_id, user)
+    stale = datetime.now(timezone.utc) - STALE_AFTER
+    # Atomic claim: only one click/user wins, so the job is never queued twice.
+    claimed = session.execute(
+        update(Song)
+        .where(Song.id == song_id, (Song.status.not_in(PENDING)) | (Song.updated_at < stale))
+        .values(status=SongStatus.queued, error=None, stage=None,
+                queued_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+    ).rowcount
+    session.commit()
+    if claimed:
+        _enqueue(song_id)
+    return RedirectResponse(f"/songs/{song_id}", status_code=303)
 
 
 @app.post("/songs/{song_id}/remove")

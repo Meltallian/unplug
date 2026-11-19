@@ -34,7 +34,9 @@ class Song(Base):
     title: Mapped[str | None] = mapped_column(String(300))
     artist: Mapped[str | None] = mapped_column(String(300))
     duration: Mapped[float | None]
-    status: Mapped[SongStatus] = mapped_column(Enum(SongStatus), default=SongStatus.queued)
+    status: Mapped[SongStatus] = mapped_column(
+        Enum(SongStatus, native_enum=False, length=20), default=SongStatus.queued)
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     stage: Mapped[str | None] = mapped_column(String(50))
     error: Mapped[str | None] = mapped_column(Text)
     submitted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))

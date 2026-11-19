@@ -1,18 +1,13 @@
 from celery import Celery
 
 from app.config import get_settings
-from app.db import SessionLocal, init_db
+from app.db import SessionLocal
 from app.models import Song, SongStatus
 from app.pipeline.download import download
 
 settings = get_settings()
 celery = Celery("unplug", broker=settings.redis_url, backend=None)
 celery.conf.update(task_acks_late=True, worker_prefetch_multiplier=1, broker_connection_retry_on_startup=True)
-
-
-@celery.on_after_configure.connect
-def _setup(**_):
-    init_db()
 
 
 def _set(song_id: int, **fields) -> None:
@@ -33,7 +28,7 @@ def process_song(song_id: int) -> None:
     song_dir = settings.songs_dir / youtube_id
     try:
         _set(song_id, status=SongStatus.processing, stage="download", error=None)
-        meta = download(youtube_id, song_dir)
+        meta = download(youtube_id, song_dir, settings.cookies_file)
         _set(song_id, title=meta["title"], duration=meta["duration"],
              artist=meta.get("artist") or meta.get("uploader"))
         # Later stages (tuning, beats, chords, lyrics, alignment, simplify) plug in here.

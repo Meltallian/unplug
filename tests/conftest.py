@@ -3,6 +3,7 @@ import os
 os.environ["DATABASE_URL"] = "sqlite:////tmp/unplug-test.db"
 os.environ["DEV_USER_EMAIL"] = "tester@example.com"
 os.environ["ADMIN_EMAILS"] = "admin@example.com"
+os.environ["CF_ACCESS_AUD"] = ""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,7 +16,7 @@ from app.db import Base, engine, init_db
 def client(monkeypatch):
     init_db()
     enqueued = []
-    monkeypatch.setattr(main, "_enqueue", enqueued.append)
+    monkeypatch.setattr(main, "_send_task", enqueued.append)
     with TestClient(main.app) as c:
         c.enqueued = enqueued
         yield c

@@ -19,6 +19,8 @@ RUN uv sync --frozen --no-install-project
 
 COPY app ./app
 COPY tests ./tests
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 RUN useradd --uid 1000 --create-home unplug
 USER unplug

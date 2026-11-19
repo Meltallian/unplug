@@ -10,6 +10,7 @@ from functools import lru_cache
 import jwt
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
@@ -32,7 +33,7 @@ def _jwks_client(team_domain: str) -> jwt.PyJWKClient:
 def email_from_request(request: Request, settings: Settings) -> str:
     if settings.dev_user_email:
         return settings.dev_user_email.lower()
-    token = request.headers.get("cf-access-jwt-assertion") or request.cookies.get("CF_Authorization")
+    token = request.headers.get("cf-access-jwt-assertion")
     if not token or not settings.cf_access_team_domain or not settings.cf_access_aud:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
@@ -60,7 +61,11 @@ def current_user(
     email = email_from_request(request, settings)
     user = session.scalar(select(User).where(User.email == email))
     if user is None:
-        user = User(email=email)
-        session.add(user)
-        session.commit()
+        try:
+            user = User(email=email)
+            session.add(user)
+            session.commit()
+        except IntegrityError:  # created concurrently by another request
+            session.rollback()
+            user = session.scalar(select(User).where(User.email == email))
     return CurrentUser(id=user.id, email=email, is_admin=email in settings.admins)

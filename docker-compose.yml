@@ -10,6 +10,8 @@ x-app: &app
   volumes:
     - ${DATA_ROOT:-/home/ubuntu/unplug-data}/songs:/data/songs
     - ${DATA_ROOT:-/home/ubuntu/unplug-data}/secrets:/data/secrets:ro
+    - ${DATA_ROOT:-/home/ubuntu/unplug-data}/fixtures:/data/fixtures:ro
+    - ${DATA_ROOT:-/home/ubuntu/unplug-data}/eval:/data/eval
   depends_on:
     postgres:
       condition: service_healthy

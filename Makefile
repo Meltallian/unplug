@@ -14,7 +14,7 @@ test:
 	$(COMPOSE) run --rm --no-deps web sh -c "cd /srv && uv sync --frozen --group dev -q && pytest -q"
 lock:
 	docker run --rm -v $(PWD):/w -w /w ghcr.io/astral-sh/uv:0.5.11-python3.12-bookworm-slim uv lock
-eval:
-	@echo "eval harness not built yet (build step 7)"
+eval:   ## score every fixture with the cached pipeline
+	$(COMPOSE) run --rm --no-deps worker python -m app.eval.run
 shell:
 	$(COMPOSE) exec web bash

@@ -129,7 +129,26 @@ def song_page(request: Request, song_id: int, user: CurrentUser = Depends(curren
               session: Session = Depends(get_session)):
     song = _song_for_user(session, song_id, user)
     return templates.TemplateResponse(request, "song.html",
-                                      {"song": song, "pos": _queue_position(session, song), "user": user})
+                                      {"song": song, "pos": _queue_position(session, song), "user": user,
+                                       "analysis": _analysis(song)})
+
+
+def _analysis(song: Song) -> dict | None:
+    """Detected key, capo and chord shapes for the interim song page (until the chart view exists)."""
+    import json
+
+    from app.music import chord_name, transpose
+
+    path = get_settings().songs_dir / song.youtube_id / "cache" / "chords.json"
+    if song.status != SongStatus.done or not path.exists():
+        return None
+    data = json.loads(path.read_text())
+    capo = data["capo"]
+    shapes = [chord_name(transpose(tuple(s["chord"]), -capo)) if s["chord"] else "N.C." for s in data["segments"]]
+    timeline = [{"t": f"{int(s['start'] // 60)}:{int(s['start'] % 60):02d}", "shape": sh}
+                for s, sh in zip(data["segments"], shapes)]
+    return {"key": data["key"]["name"], "capo": capo, "tempo": round(data["tempo"]),
+            "shapes": sorted(set(shapes) - {"N.C."}), "timeline": timeline}
 
 
 @app.get("/songs/{song_id}/status", response_class=HTMLResponse)

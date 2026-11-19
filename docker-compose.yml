@@ -42,7 +42,9 @@ services:
   worker:
     <<: *app
     command: celery -A app.tasks worker --concurrency=2 --prefetch-multiplier=1 --loglevel=info
-    # on deploy, let running songs finish (Celery warm shutdown) instead of killing them
+    # Keep exactly ONE worker container: on start it requeues every 'processing' song,
+    # which is only safe if no other worker could be running one (app/tasks.py).
+    # On deploy, let running songs finish (Celery warm shutdown) instead of killing them.
     stop_grace_period: 10m
 
   redis:

@@ -49,7 +49,7 @@ def _set(song_id: int, **fields) -> None:
         s.commit()
 
 
-def _stage(song_id: int, stage: str | None) -> None:
+def _stage(song_id: int, stage: str | None, **fields) -> None:
     """Move to the next stage, recording how long the previous one took (shown as estimates)."""
     now = datetime.now(timezone.utc)
     with SessionLocal() as s:
@@ -60,6 +60,8 @@ def _stage(song_id: int, stage: str | None) -> None:
                 started = started.replace(tzinfo=timezone.utc)
             song.timings = {**(song.timings or {}), song.stage: round((now - started).total_seconds(), 1)}
         song.stage, song.stage_started_at = stage, now if stage else None
+        for k, v in fields.items():
+            setattr(song, k, v)
         s.commit()
 
 
@@ -114,8 +116,7 @@ def process_song(song_id: int) -> None:
             _set(song_id, title=match["trackName"], artist=match["artistName"])
         _stage(song_id, "chart")
         build_draft(song_id)
-        _stage(song_id, None)
-        _set(song_id, status=SongStatus.done)
+        _stage(song_id, None, status=SongStatus.done)
     except Exception as exc:  # report any failure to the user
         _set(song_id, status=SongStatus.failed, error=f"{type(exc).__name__}: {exc}"[:2000])
         raise

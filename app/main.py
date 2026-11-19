@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from app.auth import CurrentUser, current_user
 from app.config import Settings, get_settings
 from app.db import SessionLocal, get_session
-from app.models import LibraryEntry, Song, SongStatus
+from app.models import Chart, LibraryEntry, Song, SongStatus
+from app.pipeline.chart import parse_chordpro
 from app.youtube import parse_youtube_id
 
 HERE = Path(__file__).parent
@@ -124,34 +125,98 @@ def _song_for_user(session: Session, song_id: int, user: CurrentUser) -> Song:
     return song
 
 
+def _song_files(song: Song):
+    return get_settings().songs_dir / song.youtube_id
+
+
+def _lyrics_info(song: Song) -> dict:
+    import json
+
+    path = _song_files(song) / "cache" / "lyrics.json"
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {"source": "none", "lines": []}
+
+
+def _chart_for(session: Session, song: Song, user: CurrentUser) -> tuple[Chart | None, bool]:
+    """The user's own edited copy if any, else the shared draft. Returns (chart, is_own_copy)."""
+    own = session.scalar(select(Chart).where(Chart.song_id == song.id, Chart.user_id == user.id))
+    if own:
+        return own, True
+    return session.scalar(select(Chart).where(Chart.song_id == song.id, Chart.user_id.is_(None))), False
+
+
 @app.get("/songs/{song_id}", response_class=HTMLResponse)
 def song_page(request: Request, song_id: int, user: CurrentUser = Depends(current_user),
               session: Session = Depends(get_session)):
     song = _song_for_user(session, song_id, user)
-    return templates.TemplateResponse(request, "song.html",
-                                      {"song": song, "pos": _queue_position(session, song), "user": user,
-                                       "analysis": _analysis(song)})
+    chart, own = _chart_for(session, song, user)
+    if song.status != SongStatus.done or chart is None:
+        return templates.TemplateResponse(request, "song.html",
+                                          {"song": song, "pos": _queue_position(session, song), "user": user})
+    lyrics = _lyrics_info(song)
+    return templates.TemplateResponse(request, "chart.html", {
+        "song": song, "user": user, "chart": parse_chordpro(chart.chordpro), "own": own,
+        "lyrics_source": lyrics.get("source"), "lyrics_synced": lyrics.get("synced"),
+        "lyrics_match": lyrics.get("match"),
+    })
 
 
-def _analysis(song: Song) -> dict | None:
-    """Detected key, capo and chord shapes for the interim song page (until the chart view exists)."""
-    import json
+@app.get("/songs/{song_id}/edit", response_class=HTMLResponse)
+def edit_page(request: Request, song_id: int, user: CurrentUser = Depends(current_user),
+              session: Session = Depends(get_session)):
+    song = _song_for_user(session, song_id, user)
+    chart, own = _chart_for(session, song, user)
+    if chart is None:
+        raise HTTPException(404, "This song has no chart yet.")
+    return templates.TemplateResponse(request, "edit.html",
+                                      {"song": song, "user": user, "text": chart.chordpro, "own": own})
 
-    from app.music import chord_name, transpose
 
-    path = get_settings().songs_dir / song.youtube_id / "cache" / "chords.json"
-    if song.status != SongStatus.done or not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-    capo = data["capo"]
-    shapes = [chord_name(transpose(tuple(s["chord"]), -capo)) if s["chord"] else "N.C." for s in data["segments"]]
-    timeline = [{"t": f"{int(s['start'] // 60)}:{int(s['start'] % 60):02d}", "shape": sh}
-                for s, sh in zip(data["segments"], shapes)]
-    return {"key": data["key"]["name"], "capo": capo, "tempo": round(data["tempo"]),
-            "shapes": sorted(set(shapes) - {"N.C."}), "timeline": timeline}
+@app.post("/songs/{song_id}/edit")
+def save_edit(song_id: int, chordpro: str = Form(...), user: CurrentUser = Depends(current_user),
+              session: Session = Depends(get_session)):
+    """Save the user's own copy. The shared draft stays untouched (it is the 'before' for evaluation)."""
+    song = _song_for_user(session, song_id, user)
+    if len(chordpro) > 100_000:
+        raise HTTPException(400, "That chart is too long.")
+    own = session.scalar(select(Chart).where(Chart.song_id == song.id, Chart.user_id == user.id))
+    if own:
+        own.chordpro = chordpro
+    else:
+        session.add(Chart(song_id=song.id, user_id=user.id, chordpro=chordpro))
+    session.commit()
+    return RedirectResponse(f"/songs/{song_id}", status_code=303)
+
+
+@app.post("/songs/{song_id}/reset")
+def reset_edit(song_id: int, user: CurrentUser = Depends(current_user),
+               session: Session = Depends(get_session)):
+    _song_for_user(session, song_id, user)
+    own = session.scalar(select(Chart).where(Chart.song_id == song_id, Chart.user_id == user.id))
+    if own:
+        session.delete(own)
+        session.commit()
+    return RedirectResponse(f"/songs/{song_id}", status_code=303)
+
+
+@app.post("/songs/{song_id}/lyrics")
+def paste_lyrics(song_id: int, lyrics: str = Form(...), user: CurrentUser = Depends(current_user),
+                 session: Session = Depends(get_session)):
+    """Lyrics pasted by a user (when LRCLIB had none). Shared by everyone with this song."""
+    from app.pipeline.lyrics import plain_lines, save_lyrics
+    from app.tasks import build_draft
+
+    song = _song_for_user(session, song_id, user)
+    if song.status != SongStatus.done:
+        raise HTTPException(400, "Wait until the song has finished processing.")
+    if len(lyrics) > 50_000 or not lyrics.strip():
+        raise HTTPException(400, "Paste the song's lyrics (one line per sung line).")
+    save_lyrics(_song_files(song) / "cache" / "lyrics.json",
+                {"source": "pasted", "synced": False, "lines": plain_lines(lyrics), "offset": 0.0})
+    build_draft(song.id)
+    return RedirectResponse(f"/songs/{song_id}", status_code=303)
 
 
 @app.get("/songs/{song_id}/status", response_class=HTMLResponse)

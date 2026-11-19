@@ -1,0 +1,41 @@
+body.chart-page { padding-bottom: 72px; }
+.chart-head { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--line);
+  padding: 8px 16px 6px; }
+.title-row { display: flex; align-items: center; gap: 10px; }
+.back { font-size: 2rem; line-height: 1; color: var(--fg); text-decoration: none; padding: 0 4px; }
+.titles { flex: 1; min-width: 0; }
+.song-title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edit { color: var(--accent); text-decoration: none; font-weight: 600; }
+.facts { font-size: .9rem; margin: 4px 0; }
+.facts b { font-weight: 700; }
+.diagrams { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 2px; transition: max-height .2s ease, opacity .2s ease;
+  max-height: 140px; scrollbar-width: none; }
+.chart-head.collapsed .diagrams { max-height: 0; opacity: 0; padding: 0; overflow: hidden; }
+.diagram { flex: 0 0 auto; text-align: center; font-weight: 700; font-size: .95rem; }
+.diagram svg { display: block; width: 64px; height: 84px; }
+.diagram svg .grid { stroke: var(--muted); stroke-width: 1; }
+.diagram svg .nut { stroke: var(--fg); stroke-width: 3; }
+.diagram svg .dot { fill: var(--fg); }
+.diagram svg .mark { fill: none; stroke: var(--fg); stroke-width: 1.2; }
+.diagram svg text { fill: var(--muted); font-size: 9px; }
+
+.sheet { max-width: 900px; margin: 0 auto; padding: 8px 16px 40vh; font-size: var(--chart-size, 19px); }
+.sheet h2 { font-size: .85em; color: var(--muted); font-weight: 600; margin: 1.3em 0 .3em; }
+.line { display: flex; flex-wrap: wrap; align-items: flex-end; margin: 0 0 .35em; }
+.seg { display: inline-flex; flex-direction: column; white-space: pre; }
+.ch { color: var(--accent); font-weight: 700; min-height: 1.25em; padding-right: .35em; }
+.ch.empty { visibility: hidden; }
+.tx { line-height: 1.3; }
+.note { font-size: .85rem; color: var(--muted); }
+.small { font-size: .8rem; }
+form.inline { display: inline; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); font-size: inherit; text-decoration: underline; }
+.paste textarea { margin: 8px 0; }
+
+.toolbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; display: flex; justify-content: space-around;
+  gap: 4px; padding: 8px 6px calc(8px + env(safe-area-inset-bottom)); background: var(--card); border-top: 1px solid var(--line); }
+.toolbar .grp { display: flex; align-items: center; gap: 2px; }
+.toolbar button { background: transparent; color: var(--fg); border: 1px solid var(--line); padding: 8px 10px;
+  min-width: 38px; font-size: 15px; border-radius: 8px; }
+.toolbar span { font-size: .8rem; min-width: 46px; text-align: center; color: var(--muted); }
+#scroll-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }

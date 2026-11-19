@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ chart.meta.get("title") or song.title }} · unplug</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/chart.css">
+</head>
+<body class="chart-page">
+<header class="chart-head" id="head">
+  <div class="title-row">
+    <a href="/" class="back" aria-label="Back to library">‹</a>
+    <div class="titles">
+      <div class="song-title">{{ chart.meta.get("title") or song.title }}</div>
+      <div class="muted">{{ chart.meta.get("artist") or song.artist or "" }}</div>
+    </div>
+    <a class="edit" href="/songs/{{ song.id }}/edit">Edit</a>
+  </div>
+  <div class="facts" id="facts"></div>
+  <div class="diagrams" id="diagrams" aria-label="Chord diagrams"></div>
+</header>
+
+<main class="sheet" id="sheet"
+      data-key="{{ chart.meta.get('key', '') }}" data-capo="{{ chart.meta.get('capo', '0') }}"
+      data-tempo="{{ chart.meta.get('tempo', '') }}">
+  {% if own %}<p class="note">Your edited version. <form method="post" action="/songs/{{ song.id }}/reset" class="inline"
+     onsubmit="return confirm('Discard your edits and go back to the automatic chart?')"><button class="link">Back to the automatic chart</button></form></p>{% endif %}
+  {% for section in chart.sections %}
+  <section>
+    {% if section.name %}<h2>[{{ section.name }}]</h2>{% endif %}
+    {% for line in section.lines %}
+    <div class="line">{% for chord, text in line %}<span class="seg">{% if chord %}<b class="ch" data-c="{{ chord }}">{{ chord }}</b>{% else %}<b class="ch empty"></b>{% endif %}<span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+
+  {% if lyrics_source == "none" %}
+  <section class="paste">
+    <h2>No lyrics found</h2>
+    <p class="muted">Paste the lyrics (one sung line per line) and the chords will be placed over them.</p>
+    <form method="post" action="/songs/{{ song.id }}/lyrics">
+      <textarea name="lyrics" rows="10" required></textarea>
+      <button>Use these lyrics</button>
+    </form>
+  </section>
+  {% elif lyrics_source == "pasted" or (lyrics_source == "lrclib" and not lyrics_synced) %}
+  <p class="muted small">Lyrics without timing: chords are spread evenly, so expect to fix their positions.</p>
+  {% endif %}
+  <p class="muted small">Automatic chart: chords are a first guess. Tap Edit to fix them.</p>
+</main>
+
+<nav class="toolbar" id="toolbar">
+  <div class="grp"><button data-act="font-">A−</button><button data-act="font+">A+</button></div>
+  <div class="grp"><button data-act="capo-">−</button><span id="capo-label">Capo</span><button data-act="capo+">+</button></div>
+  <div class="grp"><button data-act="key-">♭</button><span id="key-label">Key</span><button data-act="key+">♯</button></div>
+  <div class="grp"><button data-act="scroll" id="scroll-btn">▶</button><button data-act="speed-">−</button><button data-act="speed+">+</button></div>
+</nav>
+<script src="/static/chart.js"></script>
+</body>
+</html>

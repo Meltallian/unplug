@@ -6,6 +6,7 @@
   {% elif song.status.value == "failed" %}
     <p class="error">Failed: {{ song.error }}</p>
   {% else %}
-    <p>Done.{% if song.status.value == "done" and not analysis %} <a href="/songs/{{ song.id }}">Show chords</a>{% endif %}</p>
+    <p>Done. <a href="/songs/{{ song.id }}">Open the chart</a></p>
+    <script>location.reload()</script>
   {% endif %}
 </div>

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Edit · {{ song.title }}{% endblock %}
+{% block content %}
+<h1 style="font-size:1.2rem;margin:0 0 8px">Edit chart</h1>
+<p class="muted">Chords go in square brackets just before the syllable: <code>[Am]Is it so [C]perfect now</code>.
+Section names: <code>{c: Chorus}</code>. Your edits are saved as your own copy; others keep their version.</p>
+<form method="post" action="/songs/{{ song.id }}/edit">
+  <textarea name="chordpro" class="editor" spellcheck="false" autocapitalize="off" autocomplete="off">{{ text }}</textarea>
+  <div class="actions">
+    <button>Save</button>
+    <a href="/songs/{{ song.id }}" class="button secondary">Cancel</a>
+  </div>
+</form>
+{% endblock %}

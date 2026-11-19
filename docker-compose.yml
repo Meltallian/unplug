@@ -42,6 +42,8 @@ services:
   worker:
     <<: *app
     command: celery -A app.tasks worker --concurrency=2 --prefetch-multiplier=1 --loglevel=info
+    # on deploy, let running songs finish (Celery warm shutdown) instead of killing them
+    stop_grace_period: 10m
 
   redis:
     image: redis:7.4-alpine

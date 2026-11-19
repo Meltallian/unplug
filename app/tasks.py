@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 
 from celery import Celery
+from celery.signals import worker_ready
 from sqlalchemy import select, update
 
 from app.config import get_settings
@@ -16,6 +17,28 @@ from app.pipeline.lyrics import fetch_lyrics, guess_artist_track
 settings = get_settings()
 celery = Celery("unplug", broker=settings.redis_url, backend=None)
 celery.conf.update(task_acks_late=True, worker_prefetch_multiplier=1, broker_connection_retry_on_startup=True)
+
+
+def recover_interrupted() -> list[int]:
+    """Songs left 'processing' by a worker that was stopped mid-job go back in the queue.
+
+    Runs when the worker starts. There is a single worker container, so at that moment
+    nothing can really be processing: any such row is an orphan.
+    """
+    with SessionLocal() as s:
+        stuck = s.scalars(select(Song).where(Song.status == SongStatus.processing)).all()
+        for song in stuck:
+            song.status, song.stage, song.queued_at = SongStatus.queued, None, datetime.now(timezone.utc)
+        s.commit()
+        ids = [song.id for song in stuck]
+    for song_id in ids:
+        process_song.delay(song_id)
+    return ids
+
+
+@worker_ready.connect
+def _on_worker_ready(**_) -> None:
+    recover_interrupted()
 
 
 def _set(song_id: int, **fields) -> None:

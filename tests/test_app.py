@@ -163,3 +163,14 @@ def test_move_chord_name():
     from app.music import move_chord_name, shape_key
     assert move_chord_name("Fmaj7", 2) == "Gmaj7" and move_chord_name("C/G", -1) == "B/F#"
     assert move_chord_name("N.C.", 3) == "N.C." and shape_key("Bbm7") == "Bbm"
+
+
+def test_pdf_limits(client, tmp_path, monkeypatch):
+    from app.db import SessionLocal
+    from app.models import Chart
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)
+    with SessionLocal() as s:
+        c = s.query(Chart).one()
+        c.chordpro = "{capo: 12}\n" + "[C]la\n" * 8000
+        s.commit()
+    assert client.get(url + "/pdf").status_code == 413

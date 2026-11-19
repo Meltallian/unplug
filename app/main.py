@@ -1,12 +1,14 @@
+import re
+import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from datetime import datetime, timedelta, timezone
-
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -33,7 +35,7 @@ STALE_AFTER = timedelta(minutes=30)
 
 @app.exception_handler(HTTPException)
 async def _friendly_errors(request: Request, exc: HTTPException):
-    if exc.status_code in (400, 404, 409, 429) and "text/html" in request.headers.get("accept", ""):
+    if exc.status_code in (400, 404, 409, 413, 429, 503) and "text/html" in request.headers.get("accept", ""):
         return templates.TemplateResponse(request, "error.html", {"message": exc.detail, "user": None},
                                           status_code=exc.status_code)
     return await http_exception_handler(request, exc)
@@ -163,12 +165,19 @@ def song_page(request: Request, song_id: int, user: CurrentUser = Depends(curren
     })
 
 
+# PDF rendering is CPU and memory heavy: one at a time, and only for charts of sensible size.
+_PDF_LOCK = threading.Lock()
+PDF_MAX_CHARS = 30_000
+
+
+def _no_fetch(url: str, *args, **kwargs):
+    raise ValueError(f"PDF rendering never fetches resources ({url[:40]})")
+
+
 @app.get("/songs/{song_id}/pdf")
 def chart_pdf(request: Request, song_id: int, capo: int | None = None, key: int = 0,
               user: CurrentUser = Depends(current_user), session: Session = Depends(get_session)):
     """The chart as a PDF, with the capo / transposition currently chosen on screen."""
-    import re
-
     from fastapi.responses import Response
     from weasyprint import HTML
 
@@ -178,12 +187,12 @@ def chart_pdf(request: Request, song_id: int, capo: int | None = None, key: int 
     chart, _own = _chart_for(session, song, user)
     if chart is None:
         raise HTTPException(404, "This song has no chart yet.")
+    if len(chart.chordpro) > PDF_MAX_CHARS:
+        raise HTTPException(413, "This chart is too long to print.")
     parsed = parse_chordpro(chart.chordpro)
     meta = parsed["meta"]
-    try:
-        chart_capo = int(meta.get("capo", 0))
-    except ValueError:
-        chart_capo = 0
+    m = re.match(r"\s*(\d+)", meta.get("capo", "0"))
+    chart_capo = min(9, int(m.group(1))) if m else 0   # same reading as the page (parseInt)
     capo = chart_capo if capo is None else capo
     if not (0 <= capo <= 9 and -6 <= key <= 6):
         raise HTTPException(400, "Capo must be 0–9 and transposition −6…+6.")
@@ -207,10 +216,16 @@ def chart_pdf(request: Request, song_id: int, capo: int | None = None, key: int 
         key=move_chord_name(meta["key"], key) if meta.get("key") else "", capo=capo,
         tempo=meta.get("tempo", ""), sections=sections,
         diagrams=[(k, diagram_svg(k)) for k in used])
-    pdf = HTML(string=html).write_pdf()
-    filename = re.sub(r"[^A-Za-z0-9 ._-]", "", f"{meta.get('title') or song.title or 'chart'} - chords").strip()
-    return Response(pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}.pdf"'})
+    if not _PDF_LOCK.acquire(timeout=30):
+        raise HTTPException(503, "Busy printing another chart; try again in a moment.")
+    try:
+        pdf = HTML(string=html, url_fetcher=_no_fetch).write_pdf()
+    finally:
+        _PDF_LOCK.release()
+    title = f"{meta.get('title') or song.title or 'chart'} - chords"
+    ascii_name = re.sub(r"[^A-Za-z0-9 ._-]", "", title).strip() or "chart"
+    disposition = f'attachment; filename="{ascii_name}.pdf"; filename*=UTF-8\'\'{quote(title + ".pdf")}'
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": disposition})
 
 
 @app.get("/songs/{song_id}/edit", response_class=HTMLResponse)

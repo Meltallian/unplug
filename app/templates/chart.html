@@ -30,7 +30,7 @@
   <section>
     {% if section.name %}<h2>[{{ section.name }}]</h2>{% endif %}
     {% for line in section.lines %}
-    <div class="line">{% for chord, text in line %}<span class="seg">{% if chord %}<b class="ch" data-c="{{ chord }}">{{ chord }}</b>{% else %}<b class="ch empty"></b>{% endif %}<span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
+    <div class="line{% if line | selectattr(1) | map(attribute=1) | join | trim == '' %} chords-only{% endif %}">{% for chord, text in line %}<span class="seg">{% if chord %}<b class="ch" data-c="{{ chord }}">{{ chord }}</b>{% else %}<b class="ch empty"></b>{% endif %}<span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
     {% endfor %}
   </section>
   {% endfor %}
@@ -51,10 +51,11 @@
 </main>
 
 <nav class="toolbar" id="toolbar">
-  <div class="grp"><button data-act="font-">A−</button><button data-act="font+">A+</button></div>
+  <div class="grp font"><button data-act="font-" aria-label="Smaller text">A−</button><button data-act="font+" aria-label="Bigger text">A+</button></div>
+  <div class="grp speed"><button data-act="speed-" aria-label="Slower">🐢</button><button data-act="speed+" aria-label="Faster">🐇</button></div>
   <div class="grp"><button data-act="capo-">−</button><span id="capo-label">Capo</span><button data-act="capo+">+</button></div>
   <div class="grp"><button data-act="key-">♭</button><span id="key-label">Key</span><button data-act="key+">♯</button></div>
-  <div class="grp"><button data-act="scroll" id="scroll-btn">▶</button><button data-act="speed-">−</button><button data-act="speed+">+</button></div>
+  <div class="grp"><button data-act="scroll" id="scroll-btn" aria-label="Auto-scroll">▶</button></div>
 </nav>
 <script src="/static/chart.js"></script>
 </body>

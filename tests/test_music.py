@@ -79,3 +79,8 @@ def test_corrupt_features_cache_is_recomputed(tmp_path, monkeypatch):
     monkeypatch.setattr(chords.librosa, "load", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("recomputing")))
     with pytest.raises(RuntimeError, match="recomputing"):
         chords.features(tmp_path / "audio.wav")
+
+
+def test_display_tempo_halves_double_time():
+    from app.pipeline.chords import display_tempo
+    assert display_tempo(144) == 72 and display_tempo(96) == 96 and display_tempo(280) == 70

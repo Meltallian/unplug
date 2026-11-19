@@ -107,6 +107,7 @@
     scrolling = on; last = 0; carry = 0;
     btn.classList.toggle("on", on);
     btn.textContent = on ? "❚❚" : "▶";
+    document.getElementById("toolbar").classList.toggle("scrolling", on);
     if (on) requestAnimationFrame(step);
   }
   sheet.addEventListener("click", (e) => {
@@ -133,11 +134,20 @@
   });
 
   // --- collapse the diagrams while scrolling down --------------------------------------------
-  let lastY = window.scrollY;
+  // Folding changes the header height, which itself moves the page: ignore scroll events
+  // for a moment after each fold so it doesn't flicker open/closed.
+  let lastY = window.scrollY, quietUntil = 0;
+  function fold(collapsed) {
+    if (head.classList.contains("collapsed") === collapsed) return;
+    head.classList.toggle("collapsed", collapsed);
+    quietUntil = performance.now() + 350;
+  }
   window.addEventListener("scroll", () => {
     const y = window.scrollY;
-    if (y > lastY + 4 && y > 60) head.classList.add("collapsed");
-    else if (y < lastY - 4 || y < 20) head.classList.remove("collapsed");
+    if (performance.now() > quietUntil) {
+      if (y > lastY + 6 && y > 80) fold(true);
+      else if (y < lastY - 12 || y < 20) fold(false);
+    }
     lastY = y;
   }, { passive: true });
 

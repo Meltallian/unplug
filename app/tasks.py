@@ -1,6 +1,8 @@
 from celery import Celery
 
 from app.config import get_settings
+from sqlalchemy import update
+
 from app.db import SessionLocal
 from app.models import Song, SongStatus
 from app.pipeline.download import download
@@ -20,14 +22,19 @@ def _set(song_id: int, **fields) -> None:
 
 @celery.task(name="process_song")
 def process_song(song_id: int) -> None:
+    # Atomically claim the job: a duplicate or outdated message finds nothing to claim and exits.
     with SessionLocal() as s:
-        song = s.get(Song, song_id)
-        if song is None:
+        claimed = s.execute(
+            update(Song).where(Song.id == song_id, Song.status == SongStatus.queued)
+            .values(status=SongStatus.processing, stage="starting")
+        ).rowcount
+        s.commit()
+        if not claimed:
             return
-        youtube_id = song.youtube_id
+        youtube_id = s.get(Song, song_id).youtube_id
     song_dir = settings.songs_dir / youtube_id
     try:
-        _set(song_id, status=SongStatus.processing, stage="download", error=None)
+        _set(song_id, stage="download", error=None)
         meta = download(youtube_id, song_dir, settings.cookies_file)
         _set(song_id, title=meta["title"], duration=meta["duration"],
              artist=meta.get("artist") or meta.get("uploader"))

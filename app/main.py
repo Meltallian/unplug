@@ -25,7 +25,8 @@ app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 
 PENDING = (SongStatus.queued, SongStatus.processing)
-# A pending song with no update for this long is considered stuck and may be reprocessed.
+# A processing song with no stage update for this long is considered stuck and may be reprocessed.
+# (Queued songs are never "stuck": the worker's atomic claim makes a duplicate message harmless.)
 STALE_AFTER = timedelta(minutes=30)
 
 
@@ -147,7 +148,9 @@ def reprocess(song_id: int, user: CurrentUser = Depends(current_user),
     # Atomic claim: only one click/user wins, so the job is never queued twice.
     claimed = session.execute(
         update(Song)
-        .where(Song.id == song_id, (Song.status.not_in(PENDING)) | (Song.updated_at < stale))
+        .where(Song.id == song_id,
+               Song.status.not_in(PENDING)
+               | ((Song.status == SongStatus.processing) & (Song.updated_at < stale)))
         .values(status=SongStatus.queued, error=None, stage=None,
                 queued_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
     ).rowcount

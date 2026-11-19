@@ -50,6 +50,15 @@
   <p class="muted small">Lyrics without timing: chords are spread evenly, so expect to fix their positions.</p>
   {% endif %}
   <p class="muted small">Automatic chart: chords are a first guess. Tap Edit to fix them.</p>
+  <div class="song-actions">
+    <form method="post" action="/songs/{{ song.id }}/reprocess"><button class="secondary">Reprocess</button></form>
+    <form method="post" action="/songs/{{ song.id }}/remove"
+          onsubmit="return confirm('Remove this song from your library?{% if own %} Your edited version will be deleted too.{% endif %}')"><button class="secondary">Remove from my library</button></form>
+    {% if user.is_admin %}
+    <form method="post" action="/songs/{{ song.id }}/delete"
+          onsubmit="return confirm('Delete this song for EVERYONE? All libraries, all edited versions and the audio will be deleted. This cannot be undone.')"><button class="secondary danger">Delete for everyone</button></form>
+    {% endif %}
+  </div>
 </main>
 
 <nav class="toolbar" id="toolbar">

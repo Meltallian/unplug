@@ -64,3 +64,5 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); fon
 .picker-custom { display: flex; gap: 8px; margin-bottom: 12px; }
 .picker-custom input { flex: 1; min-width: 0; padding: 10px; font-size: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
 .danger { color: #c0392b !important; }
+.song-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 28px 0 8px; font-size: 15px; }
+.song-actions button { font-size: 15px; padding: 10px 12px; }

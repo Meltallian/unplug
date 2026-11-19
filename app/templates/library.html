@@ -5,15 +5,17 @@
   <button>Add</button>
 </form>
 <form class="add" method="get" action="/">
-  <input type="search" name="q" value="{{ q }}" placeholder="Search your songs">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search {{ 'all' if show_all else 'your' }} songs">
+  {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
 </form>
-{% if entries %}
+{% if user.is_admin %}<p class="muted small">{% if show_all %}All songs on the server · <a href="/">My library</a>{% else %}<a href="/?all=1">All songs (admin)</a>{% endif %}</p>{% endif %}
+{% if songs %}
 <ul class="songs">
-  {% for e in entries %}
-  <li><a href="/songs/{{ e.song.id }}">
-    {{ e.song.title or "Processing…" }}
-    {% if e.song.status.value != "done" %}<span class="badge {{ e.song.status.value }}">{{ e.song.status.value }}</span>{% endif %}
-    {% if e.song.artist %}<div class="muted">{{ e.song.artist }}</div>{% endif %}
+  {% for song in songs %}
+  <li><a href="/songs/{{ song.id }}">
+    {{ song.title or "Processing…" }}
+    {% if song.status.value != "done" %}<span class="badge {{ song.status.value }}">{{ song.status.value }}</span>{% endif %}
+    {% if song.artist %}<div class="muted">{{ song.artist }}</div>{% endif %}
   </a></li>
   {% endfor %}
 </ul>

@@ -137,3 +137,67 @@ def choose_capo(chords: list[tuple[Chord, float]], max_capo: int = 7) -> int:
         total = sum(w for _, w in chords) or 1.0
         return sum(w * shape_cost(transpose(c, -capo)) for c, w in chords) / total + CAPO_PENALTY * capo
     return min(range(max_capo + 1), key=cost)
+
+
+# --- chord names as written on charts (with any suffix) ---------------------------------------
+_NAME = re.compile(r"^([A-G])([#b]?)(.*?)(?:/([A-G])([#b]?))?$")
+
+# Same shapes as the chart page (static/chart.js), low E to high e.
+SHAPES = {
+    "C": "x32010", "C#": "x46664", "D": "xx0232", "Eb": "x68886", "E": "022100", "F": "133211",
+    "F#": "244322", "G": "320003", "Ab": "466544", "A": "x02220", "Bb": "x13331", "B": "x24442",
+    "Cm": "x35543", "C#m": "x46654", "Dm": "xx0231", "Ebm": "x68876", "Em": "022000", "Fm": "133111",
+    "F#m": "244222", "Gm": "355333", "Abm": "466444", "Am": "x02210", "Bbm": "x13321", "Bm": "x24432",
+}
+
+
+def move_chord_name(name: str, semitones: int) -> str:
+    """Transpose a written chord (keeping its suffix and bass note); anything else is returned as is."""
+    m = _NAME.match(name.strip())
+    if not m:
+        return name
+    root = NAMES[(pc(m.group(1) + m.group(2)) + semitones) % 12]
+    bass = f"/{NAMES[(pc(m.group(4) + m.group(5)) + semitones) % 12]}" if m.group(4) else ""
+    return root + m.group(3) + bass
+
+
+def shape_key(name: str) -> str | None:
+    m = _NAME.match(name.strip())
+    if not m:
+        return None
+    minor = re.match(r"^(m(?!aj)|min|-)", m.group(3)) is not None
+    return NAMES[pc(m.group(1) + m.group(2))] + ("m" if minor else "")
+
+
+def diagram_svg(key: str) -> str:
+    """Chord diagram as inline SVG (same drawing as the chart page)."""
+    frets = SHAPES.get(key)
+    if not frets:
+        return ""
+    f = [-1 if c == "x" else int(c) for c in frets]
+    played = [v for v in f if v > 0]
+    base = min(played) if played and max(played) > 4 else 1
+
+    def x(i: int) -> float:
+        return 10 + i * 9
+
+    def y(row: float) -> float:
+        return 18 + row * 12
+
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 84" width="48" height="63">']
+    for i in range(6):
+        parts.append(f'<line x1="{x(i)}" y1="{y(0)}" x2="{x(i)}" y2="{y(5)}" stroke="#888" stroke-width="1"/>')
+    for r in range(6):
+        w = 3 if r == 0 and base == 1 else 1
+        parts.append(f'<line x1="{x(0)}" y1="{y(r)}" x2="{x(5)}" y2="{y(r)}" stroke="{"#222" if w == 3 else "#888"}" stroke-width="{w}"/>')
+    if base > 1:
+        parts.append(f'<text x="0" y="{y(0.8)}" font-size="9" fill="#666">{base}</text>')
+    for i, v in enumerate(f):
+        if v < 0:
+            parts.append(f'<text x="{x(i) - 3}" y="12" font-size="9" fill="#666">×</text>')
+        elif v == 0:
+            parts.append(f'<circle cx="{x(i)}" cy="10" r="2.6" fill="none" stroke="#222" stroke-width="1.2"/>')
+        else:
+            parts.append(f'<circle cx="{x(i)}" cy="{y(v - base + 0.5)}" r="3.6" fill="#222"/>')
+    parts.append("</svg>")
+    return "".join(parts)

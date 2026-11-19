@@ -5,7 +5,7 @@ body.chart-page { padding-bottom: 72px; overflow-anchor: none; }
 .back { font-size: 2rem; line-height: 1; color: var(--fg); text-decoration: none; padding: 0 4px; }
 .titles { flex: 1; min-width: 0; }
 .song-title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.edit { color: var(--accent); text-decoration: none; font-weight: 600; }
+.edit { color: var(--accent); text-decoration: none; font-weight: 600; margin-left: 10px; }
 .facts { font-size: .9rem; margin: 4px 0; }
 .facts b { font-weight: 700; }
 .diagrams { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 2px; transition: max-height .2s ease, opacity .2s ease;

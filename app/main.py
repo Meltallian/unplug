@@ -163,6 +163,56 @@ def song_page(request: Request, song_id: int, user: CurrentUser = Depends(curren
     })
 
 
+@app.get("/songs/{song_id}/pdf")
+def chart_pdf(request: Request, song_id: int, capo: int | None = None, key: int = 0,
+              user: CurrentUser = Depends(current_user), session: Session = Depends(get_session)):
+    """The chart as a PDF, with the capo / transposition currently chosen on screen."""
+    import re
+
+    from fastapi.responses import Response
+    from weasyprint import HTML
+
+    from app.music import diagram_svg, move_chord_name, shape_key
+
+    song = _song_for_user(session, song_id, user)
+    chart, _own = _chart_for(session, song, user)
+    if chart is None:
+        raise HTTPException(404, "This song has no chart yet.")
+    parsed = parse_chordpro(chart.chordpro)
+    meta = parsed["meta"]
+    try:
+        chart_capo = int(meta.get("capo", 0))
+    except ValueError:
+        chart_capo = 0
+    capo = chart_capo if capo is None else capo
+    if not (0 <= capo <= 9 and -6 <= key <= 6):
+        raise HTTPException(400, "Capo must be 0–9 and transposition −6…+6.")
+    semis = chart_capo + key - capo
+
+    used: list[str] = []
+    sections = []
+    for section in parsed["sections"]:
+        lines = []
+        for line in section["lines"]:
+            segs = []
+            for chord, text in line:
+                name = move_chord_name(chord, semis) if chord else None
+                if name and (k := shape_key(name)) and k not in used:
+                    used.append(k)
+                segs.append((name, text))
+            lines.append(segs)
+        sections.append({"name": section["name"], "lines": lines})
+    html = templates.get_template("pdf.html").render(
+        title=meta.get("title") or song.title, artist=meta.get("artist") or song.artist or "",
+        key=move_chord_name(meta["key"], key) if meta.get("key") else "", capo=capo,
+        tempo=meta.get("tempo", ""), sections=sections,
+        diagrams=[(k, diagram_svg(k)) for k in used])
+    pdf = HTML(string=html).write_pdf()
+    filename = re.sub(r"[^A-Za-z0-9 ._-]", "", f"{meta.get('title') or song.title or 'chart'} - chords").strip()
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}.pdf"'})
+
+
 @app.get("/songs/{song_id}/edit", response_class=HTMLResponse)
 def edit_page(request: Request, song_id: int, user: CurrentUser = Depends(current_user),
               session: Session = Depends(get_session)):

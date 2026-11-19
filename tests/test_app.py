@@ -149,3 +149,17 @@ def test_tap_edit_changes_one_chord_in_own_copy(client, tmp_path, monkeypatch):
     assert client.post(url + "/chord", data={"index": 0, "chord": "G", "expected": "C"}).status_code == 409
     client.post(url + "/reset")
     assert 'data-c="C"' in client.get(url).text      # the shared draft was never touched
+
+
+def test_pdf_download(client, tmp_path, monkeypatch):
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)
+    r = client.get(url + "/pdf?capo=2&key=0")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+    assert r.content[:4] == b"%PDF"
+    assert client.get(url + "/pdf?capo=12").status_code == 400
+
+
+def test_move_chord_name():
+    from app.music import move_chord_name, shape_key
+    assert move_chord_name("Fmaj7", 2) == "Gmaj7" and move_chord_name("C/G", -1) == "B/F#"
+    assert move_chord_name("N.C.", 3) == "N.C." and shape_key("Bbm7") == "Bbm"

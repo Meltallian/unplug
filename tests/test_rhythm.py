@@ -1,6 +1,6 @@
 import numpy as np
 
-from app.pipeline.rhythm import bar_grid, fit_grid, notated_tempo, regular_beats, tempo
+from app.pipeline.rhythm import bar_grid, fit_grid, regular_beats, tempo
 
 
 def _beats(n, step=0.5):
@@ -103,15 +103,67 @@ def test_fast_beats_in_threes_are_six_eight_and_the_chords_choose_the_bars():
     downs = beats[::3]                                        # the tracker hears a "1" every three beats
     novelty = np.zeros(len(beats))
     novelty[3::6] = 1.0                                       # the chord changes every six, from beat 3 on
-    meter, pos = bar_grid(beats, downs, novelty)
-    assert meter == 6
-    assert list(pos[3:15]) == [0, 1, 2, 3, 4, 5] * 2
-    assert abs(notated_tempo(beats, meter) - 50.0) < 0.01     # dotted quarters
+    grid = bar_grid(beats, downs, novelty)
+    assert grid.main_meter == 6 and set(grid.size) == {6}
+    assert list(grid.pos[3:15]) == [0, 1, 2, 3, 4, 5] * 2
+    assert grid.sections() == [{"start": 0.0, "meter": 6, "tempo": 50.0}]   # dotted quarters
 
 
 def test_slow_beats_in_threes_stay_a_waltz_and_six_slow_beats_become_one():
     beats = np.arange(120) * 0.65                             # 92 beats a minute
-    assert bar_grid(beats, beats[::3])[0] == 3
-    meter, pos = bar_grid(beats, beats[::6])
-    assert meter == 3 and list(pos[:6]) == [0, 1, 2, 0, 1, 2]
-    assert abs(notated_tempo(beats, 3) - 60 / 0.65) < 0.01
+    assert bar_grid(beats, beats[::3]).main_meter == 3
+    grid = bar_grid(beats, beats[::6])
+    assert grid.main_meter == 3 and list(grid.pos[:6]) == [0, 1, 2, 0, 1, 2]
+    assert abs(grid.sections()[0]["tempo"] - 60 / 0.65) < 0.01
+
+
+def test_chorus_in_six_eight_and_verse_in_four_four_each_get_their_bars():
+    # 150 eighth notes a minute throughout: 16 bars of 6/8, then 12 bars of 4/4 (8 eighths), then 6/8 again
+    beats = np.arange(16 * 6 + 12 * 8 + 16 * 6) * 0.4
+    a, b = 16 * 6, 16 * 6 + 12 * 8
+    downs = np.concatenate([beats[:a:3], beats[a:b:8], beats[b::3]])
+    novelty = np.zeros(len(beats))
+    novelty[:a:6] = novelty[b::6] = 1.0                       # the chords change with the bars
+    grid = bar_grid(beats, downs, novelty)
+    assert list(grid.pos[:12]) == [0, 1, 2, 3, 4, 5] * 2
+    assert list(grid.pos[a:a + 16]) == [0, 1, 2, 3, 4, 5, 6, 7] * 2 and set(grid.size[a:b]) == {8}
+    assert list(grid.pos[b:b + 6]) == [0, 1, 2, 3, 4, 5]
+    assert grid.sections() == [{"start": 0.0, "meter": 6, "tempo": 50.0},
+                               {"start": round(float(beats[a]), 3), "meter": 4, "tempo": 75.0},
+                               {"start": round(float(beats[b]), 3), "meter": 6, "tempo": 50.0}]
+
+
+def test_a_fast_song_in_four_keeps_its_bars_and_its_tempo():
+    beats = np.arange(400) * 0.28                             # 214 beats a minute, bars of four
+    grid = bar_grid(beats, beats[::4])
+    assert set(grid.size) == {4} and grid.main_meter == 4
+    assert abs(grid.sections()[0]["tempo"] - 60 / 0.28) < 0.01 and len(grid.sections()) == 1
+
+
+def test_a_section_tracked_at_half_speed_is_put_on_the_pulse_of_the_song():
+    fast = np.arange(120) * 0.4
+    slow = fast[-1] + 0.8 + np.arange(40) * 0.8               # the tracker counts this part in quarters
+    back = slow[-1] + 0.4 + np.arange(120) * 0.4
+    beats = regular_beats(np.concatenate([fast, slow, back]), duration=float(back[-1]) + 0.3)
+    assert np.allclose(np.diff(beats), 0.4)
+
+
+def test_a_short_run_tracked_at_double_speed_loses_the_extra_beats():
+    a = np.arange(100) * 0.5
+    double = a[-1] + 0.25 + np.arange(16) * 0.25              # 4 s counted twice as fast
+    b = double[-1] + 0.5 + np.arange(100) * 0.5
+    beats = regular_beats(np.concatenate([a, double, b]), duration=float(b[-1]) + 0.3)
+    assert np.allclose(np.diff(beats), 0.5)
+
+
+def test_a_part_tracked_in_triplets_is_put_on_the_beat():
+    slow = np.arange(100) * 0.84                             # most of the song: 71 beats a minute
+    triplets = -0.28 * np.arange(1, 91)[::-1]                # the first 25 s counted three times as fast
+    beats = regular_beats(np.concatenate([triplets, slow]) + 26.0, duration=110.0)
+    assert np.allclose(np.diff(beats), 0.84)
+
+
+def test_pulse_is_what_most_of_the_time_is_counted_in():
+    from app.pipeline.rhythm import _typical
+    assert _typical(np.array([0.28] * 90 + [0.84] * 100)) == 0.84     # 25 s of triplets, 84 s of beats
+    assert _typical(np.array([0.4] * 380 + [0.8] * 100)) == 0.4      # 152 s of eighths, 80 s of quarters

@@ -19,6 +19,8 @@ _NOISE = re.compile(
     re.I)
 _VARIANTS = ("unplugged", "acoustic", "live", "remix", "demo", "piano", "orchestral")
 SAME_LENGTH = 3.0  # seconds; lyrics this close in length to the video need no offset
+OFFSET_VERSION = 2  # bump when estimate_offset changes: cached lyrics get their offset recomputed
+LINE_WINDOW = 2.0  # seconds of music a sung line needs under its start
 _LRC_LINE = re.compile(r"^\[(\d+):(\d+(?:\.\d+)?)\](.*)$")
 
 
@@ -118,8 +120,14 @@ def vocal_activity(wav: Path, hop_s: float = 0.1) -> tuple[np.ndarray, float]:
 
 
 def estimate_offset(lines: list[dict], activity: np.ndarray, hop_s: float,
-                    video_duration: float, lyrics_duration: float | None) -> float:
-    """Shift (s) to add to LRC times so sung lines land on high vocal-band activity and long gaps on low."""
+                    video_duration: float, lyrics_duration: float | None,
+                    music: list[tuple[float, float]] | None = None) -> float:
+    """Shift (s) to add to LRC times so sung lines land on high vocal-band activity and long gaps on low.
+
+    `music`: the stretches of the video where chords were found. A line is sung over music, so
+    shifts that push lines into silence (a video intro or outro without the band) are ruled out
+    first; among the others the vocal-band activity decides. Without this, loud guitars pass
+    for singing and a video with a long outro gets its lyrics tens of seconds late."""
     times = [ln["t"] for ln in lines if ln["text"]]
     if not times:
         return 0.0
@@ -145,16 +153,58 @@ def estimate_offset(lines: list[dict], activity: np.ndarray, hop_s: float,
             return -1e9
         return float(np.mean(sung)) - (float(np.mean(gaps)) if gaps else 0.0)
 
+    def off_the_music(offset: float) -> float:
+        """Share of sung lines that would start where there is no music."""
+        missed = 0
+        for t in times:
+            a, b = t + offset, t + offset + LINE_WINDOW
+            covered = sum(max(0.0, min(b, e) - max(a, s)) for s, e in music)
+            missed += covered < LINE_WINDOW / 2
+        return missed / len(times)
+
     candidates = np.arange(lo, hi + 1e-9, 0.25)
+    if music:
+        missed = np.array([off_the_music(c) for c in candidates])
+        candidates = candidates[missed <= missed.min() + 0.03]
     best = max(candidates, key=score)
     return round(float(best), 2)
 
 
-def fetch_lyrics(song_dir: Path, wav: Path, meta: dict) -> dict:
+def music_stretches(analysis: dict | None) -> list[tuple[float, float]] | None:
+    """Where the chord stage found chords: [(start, end)], neighbours joined."""
+    if not analysis:
+        return None
+    out: list[list[float]] = []
+    for seg in analysis.get("segments", []):
+        if seg.get("chord") is None:
+            continue
+        if out and seg["start"] - out[-1][1] < 0.5:
+            out[-1][1] = seg["end"]
+        else:
+            out.append([seg["start"], seg["end"]])
+    return [(a, b) for a, b in out] or None
+
+
+def _offset(lines: list[dict], wav: Path, meta: dict, match: dict, analysis: dict | None) -> float:
+    try:
+        act, hop_s = vocal_activity(wav)
+        return estimate_offset(lines, act, hop_s, meta.get("duration") or 0, match.get("duration"),
+                               music_stretches(analysis))
+    except Exception:
+        return 0.0
+
+
+def fetch_lyrics(song_dir: Path, wav: Path, meta: dict, analysis: dict | None = None) -> dict:
+    """Lyrics for a song (cached). `analysis`: the chord stage's result, used to place the lyrics."""
     out = song_dir / "cache" / "lyrics.json"
     if out.exists():
         try:
             cached = json.loads(out.read_text())
+            if cached.get("source") == "lrclib" and cached.get("synced") and cached.get("match") \
+                    and cached.get("offset_version") != OFFSET_VERSION:
+                cached["offset"] = _offset(cached["lines"], wav, meta, cached["match"], analysis)
+                cached["offset_version"] = OFFSET_VERSION
+                save_lyrics(out, cached)
             if cached.get("source") != "none":
                 return cached
         except json.JSONDecodeError:
@@ -170,15 +220,9 @@ def fetch_lyrics(song_dir: Path, wav: Path, meta: dict) -> dict:
     if match:
         synced = bool(match.get("syncedLyrics"))
         lines = parse_lrc(match["syncedLyrics"]) if synced else plain_lines(match.get("plainLyrics") or "")
-        offset = 0.0
-        if synced:
-            try:
-                act, hop_s = vocal_activity(wav)
-                offset = estimate_offset(lines, act, hop_s, meta.get("duration") or 0, match.get("duration"))
-            except Exception:
-                offset = 0.0
+        offset = _offset(lines, wav, meta, match, analysis) if synced else 0.0
         result = {"source": "lrclib", "synced": synced, "lines": lines, "offset": offset,
-                  "query": [artist, track],
+                  "offset_version": OFFSET_VERSION, "query": [artist, track],
                   "match": {k: match.get(k) for k in ("id", "artistName", "trackName", "albumName", "duration")}}
     save_lyrics(out, result)
     return result

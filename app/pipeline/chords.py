@@ -104,12 +104,13 @@ def span_means(frames: np.ndarray, step: float, bounds: np.ndarray) -> np.ndarra
     return (at[1:] - at[:-1]) / width
 
 
-def _change_prob(pos: np.ndarray, meter: int, p: Params) -> np.ndarray:
-    """Chance of a chord change on each beat, from its position in the bar."""
+def _change_prob(pos: np.ndarray, size, p: Params) -> np.ndarray:
+    """Chance of a chord change on each beat, from its position in a bar of `size` beats
+    (one number, or one per beat where the time signature changes)."""
+    size = np.broadcast_to(np.asarray(size), pos.shape)
     c = np.full(len(pos), p.change_off)
     c[pos <= 0] = p.change_bar                       # the "1" (and the stretch before the first beat)
-    if meter % 2 == 0:
-        c[pos == meter // 2] = p.change_half
+    c[(size % 2 == 0) & (pos == size // 2)] = p.change_half
     return c
 
 
@@ -144,10 +145,11 @@ def _written_quality(chord: tuple, probs: np.ndarray, p: Params) -> str:
     return quality
 
 
-def decode_beats(probs: np.ndarray, rms: np.ndarray, times: np.ndarray, pos: np.ndarray, meter: int,
+def decode_beats(probs: np.ndarray, rms: np.ndarray, times: np.ndarray, pos: np.ndarray, size,
                  p: Params = PARAMS) -> tuple[list[dict], tuple]:
     """Chords from per-beat model probabilities (beats × 170), loudness, the beat bounds (beats + 1
-    times) and each beat's position in its bar. Returns (segments, key)."""
+    times), each beat's position in its bar and the number of beats of that bar (one number, or
+    one per beat). Returns (segments, key)."""
     family = probs @ _family_matrix().T                                        # beats × 24
     weights = rms / (rms.sum() or 1.0)
     profile = np.zeros(12)
@@ -161,7 +163,7 @@ def decode_beats(probs: np.ndarray, rms: np.ndarray, times: np.ndarray, pos: np.
     silent = rms < p.silence_ratio * np.median(rms)
     none = (probs[:, btc.N_INDEX] + 1e-6) ** p.sharpness
     lik = np.vstack([lik, np.where(silent, lik.max(axis=0) * 10, none)])
-    path = _viterbi(np.log(lik / lik.sum(axis=0, keepdims=True)), _change_prob(pos, meter, p))
+    path = _viterbi(np.log(lik / lik.sum(axis=0, keepdims=True)), _change_prob(pos, size, p))
 
     segments: list[dict] = []
     for i, state in enumerate(path):
@@ -198,18 +200,21 @@ def decode(feats: dict, p: Params = PARAMS) -> dict:
     times = np.concatenate([[0.0], beats, [duration]])
     probs = span_means(feats["probs"], btc.FRAME_S, times)
     rms = span_means(feats["rms"], float(feats["rms_step"]), times)
-    meter, beat_pos = rhythm.bar_grid(beats, downbeats, novelty(probs)[1:])
-    pos = np.concatenate([[-1], beat_pos])           # the stretch before the first beat has no bar position
-    segments, key = decode_beats(probs, rms, times, pos, meter, p)
+    grid = rhythm.bar_grid(beats, downbeats, novelty(probs)[1:])
+    pos = np.concatenate([[-1], grid.pos])           # the stretch before the first beat has no bar position
+    size = np.concatenate([grid.size[:1], grid.size]) if len(beats) else np.array([4])
+    segments, key = decode_beats(probs, rms, times, pos, size, p)
 
+    meters = grid.sections()
     weighted = [(s["chord"], s["end"] - s["start"]) for s in segments if s["chord"] != "N"]
     return {
         "version": VERSION,
         "params": asdict(p),
         "tuning_semitones": round(float(feats["tuning"]), 3),
-        "tempo": round(rhythm.notated_tempo(beats, meter), 2),
-        "meter": meter,
-        "downbeats": [round(float(t), 3) for t, q in zip(times, pos) if q == 0],
+        "tempo": meters[0]["tempo"],                  # of the beat the time signature names, at the start
+        "meter": meters[0]["meter"],                  # 3 = 3/4, 4 = 4/4, 6 = 6/8, at the start
+        "meters": meters,                             # ... and every change of time signature after that
+        "downbeats": [round(float(t), 3) for t in grid.downbeats],
         "key": {"tonic": key[0], "mode": key[1], "name": key_name(key)},
         "capo": choose_capo(weighted),
         "segments": [

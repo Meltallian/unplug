@@ -154,7 +154,13 @@ def score(analysis: dict, bb_dir: Path, alignment: tuple[float, float] | None = 
     shifted = _contiguous(np.clip(est_iv * scale + offset, 0, None))
     keep = shifted[:, 1] > shifted[:, 0]
     res = mir_eval.chord.evaluate(ref_iv, ref_lab, shifted[keep], [l for l, k in zip(est_lab, keep) if k])
-    row = {"off": round(offset, 2), "scale": round(scale, 4), "root": res["root"], "majmin": res["majmin"], "7ths": res["sevenths"],
+    key = "-"
+    if salami["tonic"] and analysis.get("key"):
+        from app.music import pc
+        tonic, est = pc(salami["tonic"]), analysis["key"]
+        relative = (est["tonic"] + (3 if est["mode"] == "minor" else 9)) % 12
+        key = "exact" if est["tonic"] == tonic else ("rel" if relative == tonic else "off")
+    row = {"off": round(offset, 2), "scale": round(scale, 4), "key": key, "root": res["root"], "majmin": res["majmin"], "7ths": res["sevenths"],
            "seg": res["seg"], "time": time_signature(analysis.get("meter", 4)), "ref_time": ref["metre"]}
     downs = np.asarray(analysis.get("downbeats") or [])
     if ref["bar"] and len(downs) > 2:
@@ -185,6 +191,7 @@ def summarise(rows: list[dict]) -> dict:
         if vals:
             out[c + "_ok"] = float(np.mean([abs(v - 1) <= 0.06 for v in vals]))
     out["time_ok"] = float(np.mean([r["time"] == r["ref_time"] for r in rows]))
+    out["key_ok"] = float(np.mean([r["key"] in ("exact", "rel") for r in rows]))
     return out
 
 

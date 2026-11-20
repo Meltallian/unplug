@@ -8,7 +8,7 @@ def test_task_claims_job_only_once(client, monkeypatch):
                         {"title": "T", "duration": 1, "artist": "A", "uploader": "U"})
     monkeypatch.setattr(tasks, "decode", lambda d: d / "audio.wav")
     monkeypatch.setattr(tasks, "analyze", lambda wav, out: {})
-    monkeypatch.setattr(tasks, "fetch_lyrics", lambda d, wav, meta: {"lines": []})
+    monkeypatch.setattr(tasks, "fetch_lyrics", lambda d, wav, meta, analysis=None: {"lines": []})
     monkeypatch.setattr(tasks, "build_draft", lambda song_id: None)
     client.post("/songs", data={"link": "_K6KyS3vxkc"})
     with SessionLocal() as s:

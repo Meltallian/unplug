@@ -18,7 +18,7 @@ from app.auth import CurrentUser, current_user
 from app.config import Settings, get_settings
 from app.db import SessionLocal, get_session
 from app.models import Chart, LibraryEntry, Song, SongStatus
-from app.pipeline.chart import bar_cells, line_kind, parse_chordpro
+from app.pipeline.chart import bar_cells, bar_row, line_kind, parse_chordpro
 from app.youtube import parse_youtube_id
 
 HERE = Path(__file__).parent
@@ -29,6 +29,7 @@ app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 templates.env.filters["line_kind"] = line_kind
 templates.env.filters["bar_cells"] = bar_cells
+templates.env.filters["bar_row"] = bar_row
 
 PENDING = (SongStatus.queued, SongStatus.processing)
 # A processing song with no stage update for this long is considered stuck and may be reprocessed.
@@ -178,6 +179,46 @@ def song_page(request: Request, song_id: int, user: CurrentUser = Depends(curren
     })
 
 
+@app.get("/songs/{song_id}/score", response_class=HTMLResponse)
+def song_score(song_id: int, width: int = 400, capo: int | None = None, key: int = 0,
+               user: CurrentUser = Depends(current_user), session: Session = Depends(get_session)):
+    """The engraved score of the chart as an HTML fragment (inline SVG), laid out for a screen
+    `width` CSS pixels wide, with the capo / transposition currently chosen on screen."""
+    from html import escape
+
+    from app.pipeline.score import TooLong, engrave
+
+    song = _song_for_user(session, song_id, user)
+    chart, own = _chart_for(session, song, user)
+    if chart is None:
+        raise HTTPException(404, "This song has no chart yet.")
+    if not ((capo is None or 0 <= capo <= 9) and -6 <= key <= 6):
+        raise HTTPException(400, "Capo must be 0–9 and transposition −6…+6.")
+    try:
+        engraving = engrave(chart.chordpro, width=width, capo=capo, key=key)
+    except TooLong as exc:
+        raise HTTPException(413, str(exc))
+    if not engraving.pages:
+        return HTMLResponse('<p class="muted">This chart has no chords to engrave yet.</p>')
+    note = ""
+    if engraving.unbarred:
+        fix = ("Add | bar lines in Edit, or go back to the automatic chart." if own
+               else "Reprocess the song to get real bars.")
+        note = ('<p class="muted small score-note">Lines without bar lines are drawn with one bar '
+                f"per chord. {escape(fix)}</p>")
+    return HTMLResponse(note + "".join(f'<div class="score-page">{svg}</div>' for svg in engraving.pages))
+
+
+@app.get("/score-font.woff2")
+def score_font():
+    """The music font used by the text of the engraved score (tempo notes, sharps and flats)."""
+    from fastapi.responses import Response
+
+    from app.pipeline.score import music_font
+
+    return Response(music_font(), media_type="font/woff2", headers={"Cache-Control": "public, max-age=604800"})
+
+
 # PDF rendering is CPU and memory heavy: one at a time, and only for charts of sensible size.
 _PDF_LOCK = threading.Lock()
 PDF_MAX_CHARS = 30_000
@@ -223,7 +264,7 @@ def chart_pdf(request: Request, song_id: int, capo: int | None = None, key: int 
                     used.append(k)
                 segs.append((name, text))
             lines.append(segs)
-        sections.append({"name": section["name"], "lines": lines})
+        sections.append({"name": section["name"], "lines": lines, "changes": section["changes"]})
     html = templates.get_template("pdf.html").render(
         title=meta.get("title") or song.title, artist=meta.get("artist") or song.artist or "",
         key=move_chord_name(meta["key"], key) if meta.get("key") else "", capo=capo,

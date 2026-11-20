@@ -242,3 +242,97 @@ def test_stage_timings_recorded():
         song = s.get(Song, sid)
         assert set(song.timings) == {"download", "chords"} and song.stage is None
         s.delete(song); s.commit()
+
+
+# --- score view -----------------------------------------------------------------------------------
+
+BARRED = ("{title: T}\n{key: C}\n{capo: 0}\n{tempo: 90}\n{time: 4/4}\n"
+          "{c: Intro}\n| [C] | % |\n"
+          "{c: Verse}\nAnd | [C]hello there | [G]you . . [Am] | |\n"
+          "{c: Chorus}\n{time: 6/8}\n{tempo: 60}\n| [F]sing |\n")
+
+
+def _set_draft(text):
+    from app.db import SessionLocal
+    from app.models import Chart
+    with SessionLocal() as s:
+        s.query(Chart).filter(Chart.user_id.is_(None)).one().chordpro = text
+        s.commit()
+
+
+def test_song_page_has_score_and_lyrics_views(client, tmp_path, monkeypatch):
+    import re
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)
+    _set_draft(BARRED)
+    page = client.get(url).text
+    assert 'id="score"' in page and 'data-view="score"' in page and 'data-view="lyrics"' in page
+    # sung rows: bars as cells with the pickup in front, never a raw "|" among the words
+    assert 'class="line lbars"' in page and 'class="cell pickup"' in page and 'class="line bars"' in page
+    assert all("|" not in text for text in re.findall(r'<span class="tx">([^<]*)</span>', page))
+    assert ">hello there <" in page and ">And <" in page
+    assert '<div class="meter">6/8 · ♩. = 60</div>' in page
+    # every chord mark is numbered in text order, as POST /chord counts them
+    assert [int(i) for i in re.findall(r'data-i="(\d+)"', page)] == [0, 1, 2, 3, 4]
+    assert re.findall(r'data-c="([^"]+)" data-i', page) == ["C", "C", "G", "Am", "F"]
+
+
+def test_score_fragment_matches_the_page(client, tmp_path, monkeypatch):
+    import re
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)
+    _set_draft(BARRED)
+    r = client.get(url + "/score?width=400")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert r.text.startswith('<div class="score-page"><svg') and "score-note" not in r.text
+    page = client.get(url).text
+    assert sorted(int(i) for i in re.findall(r'id="chord-(\d+)"', r.text)) == [int(i) for i in re.findall(r'data-i="(\d+)"', page)]
+    # capo and key as on screen; a silly width is clamped, not refused
+    assert ">D<" in client.get(url + "/score?width=400&key=2").text
+    assert ">A<" in client.get(url + "/score?width=400&capo=3").text and "Capo 3" in client.get(url + "/score?capo=3").text
+    assert client.get(url + "/score?width=1").status_code == 200 and client.get(url + "/score?width=100000").status_code == 200
+    assert client.get(url + "/score?capo=12").status_code == 400 and client.get(url + "/score?key=7").status_code == 400
+    assert client.get("/songs/999/score").status_code == 404
+
+
+def test_score_follows_a_tapped_chord_change(client, tmp_path, monkeypatch):
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)
+    _set_draft(BARRED)
+    assert client.post(url + "/chord", data={"index": 3, "chord": "Dm7", "expected": "Am"}).status_code == 204
+    svg = client.get(url + "/score?width=400").text
+    assert ">Dm7<" in svg and ">Am<" not in svg
+    assert 'data-c="Dm7" data-i="3"' in client.get(url).text
+
+
+def test_score_of_a_chart_without_bars(client, tmp_path, monkeypatch):
+    url = _done_song_with_draft(client, tmp_path, monkeypatch)       # the old draft: "[C]hello", no bar lines
+    r = client.get(url + "/score")
+    assert r.status_code == 200 and "<svg" in r.text and 'id="chord-0"' in r.text
+    assert "score-note" in r.text and "Reprocess" in r.text
+    client.post(url + "/edit", data={"chordpro": "{c: Verse}\n[G]hello\n"})                 # own copy, still no bars
+    assert "Add | bar lines in Edit" in client.get(url + "/score").text
+    client.post(url + "/edit", data={"chordpro": "{title: nothing to play}\n"})
+    assert "no chords to engrave" in client.get(url + "/score").text
+
+
+def test_score_needs_a_chart(client):
+    url = client.post("/songs", data={"link": "_K6KyS3vxkc"}, follow_redirects=False).headers["location"]
+    assert client.get(url + "/score").status_code == 404
+
+
+def test_score_font_is_served(client):
+    r = client.get("/score-font.woff2")
+    assert r.status_code == 200 and r.headers["content-type"] == "font/woff2" and r.content[:4] == b"wOF2"
+    assert "max-age" in r.headers["cache-control"]
+
+
+def test_pdf_template_shows_bar_rows():
+    # the HTML that goes to WeasyPrint (the PDF itself needs libpango, see test_pdf_download)
+    import re
+    from app import main
+    from app.pipeline.chart import parse_chordpro
+    html = main.templates.get_template("pdf.html").render(
+        title="T", artist="", key="C", capo=0, tempo="90", time="4/4", diagrams=[],
+        sections=parse_chordpro(BARRED + "[Am]an old [F]line\n")["sections"])
+    assert 'class="line lbars"' in html and 'class="cell pickup"' in html and 'class="line bars"' in html
+    assert '<span class="meter">6/8 · ♩. = 60</span>' in html
+    assert all("|" not in text for text in re.findall(r'<span class="tx">([^<]*)</span>', html))
+    assert ">hello there <" in html and '<b class="ch rep">·</b>' in html and ">an old <" in html

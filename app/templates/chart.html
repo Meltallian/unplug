@@ -6,6 +6,9 @@
   <title>{{ chart.meta.get("title") or song.title }} · unplug</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/chart.css">
+  <script>/* the view chosen last time, before anything is painted */
+    try { document.documentElement.dataset.view = localStorage.getItem("unplug.view") === '"lyrics"' ? "lyrics" : "score"; } catch (e) { document.documentElement.dataset.view = "score"; }
+  </script>
 </head>
 <body class="chart-page">
 <header class="chart-head" id="head">
@@ -18,29 +21,46 @@
     <a class="edit" id="pdf-link" href="/songs/{{ song.id }}/pdf">PDF</a>
     <a class="edit" href="/songs/{{ song.id }}/edit">Edit</a>
   </div>
-  <div class="facts" id="facts"></div>
+  <div class="facts-row">
+    <div class="facts" id="facts"></div>
+    <div class="views" id="views" role="group" aria-label="View">
+      <button type="button" data-view="score" aria-pressed="true">Score</button><button type="button" data-view="lyrics" aria-pressed="false">Lyrics</button>
+    </div>
+  </div>
   <div class="diagrams" id="diagrams" aria-label="Chord diagrams"></div>
 </header>
 
 {% set ns = namespace(i=0) %}
+{# One piece of a bar: a chord (numbered like replace_chord counts them), a mark (. % N.C.) or plain words. #}
+{% macro piece(kind, value, text, ns) -%}
+<span class="seg">{% if kind == "chord" %}<b class="ch" data-c="{{ value }}" data-i="{{ ns.i }}" role="button" tabindex="0">{{ value }}</b>{% set ns.i = ns.i + 1 %}{% elif kind == "mark" %}<b class="ch rep">{{ "·" if value == "." else value }}</b>{% else %}<b class="ch empty"></b>{% endif %}<span class="tx">{{ text if text.strip() else " " }}</span></span>
+{%- endmacro %}
 <main class="sheet" id="sheet" data-song="{{ song.id }}"
       data-key="{{ chart.meta.get('key', '') }}" data-capo="{{ chart.meta.get('capo', '0') }}"
       data-tempo="{{ chart.meta.get('tempo', '') }}" data-time="{{ chart.meta.get('time', '') }}">
   {% if own %}<p class="note">Your edited version. <form method="post" action="/songs/{{ song.id }}/reset" class="inline"
      onsubmit="return confirm('Discard your edits and go back to the automatic chart?')"><button class="link">Back to the automatic chart</button></form></p>{% endif %}
+  <div class="score" id="score" aria-label="Engraved score"></div>
+  <div class="lyrics" id="lyrics">
   {% for section in chart.sections %}
   <section>
     {% if section.name %}<h2>[{{ section.name }}]</h2>{% endif %}
     {% for line in section.lines %}
+    {% if section.changes.get(loop.index0) %}<div class="meter">{{ section.changes[loop.index0].label }}</div>{% endif %}
     {% set kind = line | line_kind %}
     {% if kind == "bars" %}
-    <div class="line bars">{% for cell in line | bar_cells %}<span class="cell">{% for what, v in cell %}{% if what == "chord" %}<b class="ch" data-c="{{ v }}" data-i="{{ ns.i }}" role="button" tabindex="0">{{ v }}</b>{% set ns.i = ns.i + 1 %}{% else %}<span class="rep">{{ v }}</span>{% endif %}{% endfor %}</span>{% endfor %}</div>
+    <div class="line bars">{% for cell in line | bar_cells %}<span class="cell">{% for what, v in cell %}{% if what == "chord" %}<b class="ch" data-c="{{ v }}" data-i="{{ ns.i }}" role="button" tabindex="0">{{ v }}</b>{% set ns.i = ns.i + 1 %}{% else %}<span class="rep">{{ "·" if v == "." else v }}</span>{% endif %}{% endfor %}</span>{% endfor %}</div>
+    {% elif kind == "lyric-bars" %}
+    {% set pickup, cells = line | bar_row %}
+    <div class="line lbars">{% if pickup %}<span class="cell pickup">{% for what, v, text in pickup %}{{ piece(what, v, text, ns) }}{% endfor %}</span>{% endif %}{% for cell in cells %}<span class="cell">{% for what, v, text in cell %}{{ piece(what, v, text, ns) }}{% else %}{{ piece("", "", "", ns) }}{% endfor %}</span>{% endfor %}</div>
     {% else %}
-    <div class="line {{ kind }}">{% for chord, text in line %}<span class="seg">{% if chord %}<b class="ch" data-c="{{ chord }}" data-i="{{ ns.i }}" role="button" tabindex="0">{{ chord }}</b>{% set ns.i = ns.i + 1 %}{% else %}<b class="ch empty"></b>{% endif %}<span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
+    <div class="line {{ kind }}">{% for chord, text in line %}<span class="seg">{% if chord %}<b class="ch" data-c="{{ chord }}" data-i="{{ ns.i }}" role="button" tabindex="0">{{ chord }}</b>{% set ns.i = ns.i + 1 %}{% else %}<b class="ch empty"></b>{% endif %}<span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
     {% endif %}
     {% endfor %}
+    {% if section.changes.get(section.lines | length) %}<div class="meter">{{ section.changes[section.lines | length].label }}</div>{% endif %}
   </section>
   {% endfor %}
+  </div>
 
   {% if lyrics_source == "none" %}
   <section class="paste">

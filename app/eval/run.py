@@ -10,6 +10,7 @@ Scores are tolerant because the reference sheets are hand-made (see the spec):
 Reference-free checks (also for songs without a sheet):
   inkey    share of time on chords that fit the detected key
   short    share of chord changes lasting under 2 beats
+  onbar    share of chord changes that land on the "1" of a bar
   chg/min  chord changes per minute
 """
 
@@ -72,12 +73,16 @@ def score_song(fixture: Path, songs_dir: Path, params=None) -> dict:
     voiced_time = sum(e - s for _, s, e, _ in voiced) or 1.0
     in_key = sum(e - s for c, s, e, _ in voiced if c in diatonic(det_key)) / voiced_time
     short = sum(1 for *_, b in voiced if b < 2) / (len(voiced) or 1)
+    downbeats = result.get("downbeats") or []
+    onbar = (sum(1 for _, s, *_ in voiced if any(abs(s - d) < 0.05 for d in downbeats)) / (len(voiced) or 1)
+             if downbeats else None)
     row = {
         "song": src["song"],
         "key": key_name(det_key),
         "capo": result["capo"],
         "inkey": in_key,
         "short": short,
+        "onbar": onbar,
         "chg/min": len(voiced) / (total / 60),
         "detected": " ".join(chord_name(c) for c in sorted(det_chords, key=lambda c: -dur[c])),
     }
@@ -113,16 +118,17 @@ def score_song(fixture: Path, songs_dir: Path, params=None) -> dict:
     return row
 
 
-COLUMNS = ["key_match", "shift", "roots", "chords", "trans", "key@s", "chords@s", "trans@s", "inkey", "short", "chg/min"]
+COLUMNS = ["key_match", "shift", "roots", "chords", "trans", "key@s", "chords@s", "trans@s", "inkey", "short", "onbar", "chg/min"]
 SUMMED = ["roots", "chords", "trans", "chords@s", "trans@s"]
 
 
 def _means(scored: list[dict], analysed: list[dict]) -> dict:
     """Sheet scores average over songs with a sheet; reference-free checks over every song."""
     means = {c: sum(r[c] for r in scored) / len(scored) for c in SUMMED if all(c in r for r in scored)} if scored else {}
-    for c in ("inkey", "short"):
-        if analysed:
-            means[c] = sum(r[c] for r in analysed) / len(analysed)
+    for c in ("inkey", "short", "onbar"):
+        vals = [r[c] for r in analysed if r.get(c) is not None]
+        if vals:
+            means[c] = sum(vals) / len(vals)
     return means
 
 
@@ -133,7 +139,7 @@ def _fmt(v) -> str:
 
 
 def _parse_overrides(argv: list[str]) -> dict[str, float]:
-    """`make eval ARGS="bass_weight=1 self_transition=0.9"` → experiment without changing the code."""
+    """`make eval ARGS="bass_weight=1 change_bar=0.3"` → experiment without changing the code."""
     return {k: float(v) for k, v in (a.split("=", 1) for a in argv if "=" in a)}
 
 

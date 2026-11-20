@@ -20,7 +20,20 @@ dependencies = [
     "numpy>=1.26",
     "soundfile>=0.12",
     "weasyprint>=63.0",
+    "beat-this>=1.1.0",
+    "torch>=2.5",
+    "torchaudio>=2.5",
 ]
+
+# CPU-only PyTorch (the default wheels pull in ~3 GB of CUDA libraries)
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchaudio = [{ index = "pytorch-cpu" }]
 
 [dependency-groups]
 dev = ["pytest>=8.3"]

@@ -130,3 +130,40 @@ def test_replace_chord_skips_empty_brackets_and_checks_expected():
     assert replace_chord(text, 1, "G", expected="C") == "[ ]la [Am]la [G]la\n"
     with pytest.raises(ValueError):
         replace_chord(text, 1, "G", expected="Am")
+
+
+BARS = {**ANALYSIS, "meter": 4, "downbeats": [float(t) for t in range(0, 40, 2)]}   # a bar every 2 s
+
+
+def test_instrumental_is_written_as_bars_with_repeat_signs():
+    from app.pipeline.chart import line_kind
+    # Am for two bars, then C and G sharing one bar, then F; lyrics start at 10 s
+    segs = [(AM, 0, 4, 8), (C, 4, 5, 2), (G, 5, 6, 2), (F, 6, 10, 8), (C, 10, 14, 8)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 10.0, "text": "First sung line"}]}
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics=lyrics, duration=14)
+    assert "| [Am] | % | [C] [G] | [F] |\n| % |" in text
+    assert "{time: 4/4}" in text
+    parsed = parse_chordpro(text)
+    assert parsed["meta"]["time"] == "4/4"
+    intro = parsed["sections"][0]
+    assert intro["name"] == "Intro" and [line_kind(l) for l in intro["lines"]] == ["bars", "bars"]
+    assert line_kind(parsed["sections"][1]["lines"][0]) == ""
+
+
+def test_no_lyrics_chart_is_bars():
+    segs = [(AM, 0, 4, 8), (F, 4, 8, 8)]
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics={"lines": []}, duration=8)
+    assert "| [Am] | % | [F] | % |" in text
+
+
+def test_line_kind():
+    from app.pipeline.chart import line_kind
+    assert line_kind([(None, "| "), ("Am", " | % |")]) == "bars"
+    assert line_kind([("Am", " "), ("F", "")]) == "chords-only"
+    assert line_kind([("Am", "Hello | world")]) == ""
+
+
+def test_bar_cells():
+    from app.pipeline.chart import bar_cells
+    line = parse_chordpro("{c: Intro}\n| [Am] | % | [C] [G] | [F] |\n")["sections"][0]["lines"][0]
+    assert bar_cells(line) == [[("chord", "Am")], [("repeat", "%")], [("chord", "C"), ("chord", "G")], [("chord", "F")]]

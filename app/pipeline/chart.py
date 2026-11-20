@@ -662,11 +662,11 @@ def _words(pieces: list[tuple]) -> list[list[tuple[str, bool]]]:
     """The words written after each piece of a bar as (word, glued): glued means it continues the
     word before it without a space (only a chord mark stands between them)."""
     out, open_word = [], False
-    for piece in pieces:
-        text = piece[2]
-        out.append([(m.group(), open_word and m.start() == 0) for m in re.finditer(r"\S+", text)])
-        if text:
-            open_word = not text[-1].isspace()
+    for kind, _, text, *_ in pieces:
+        cut = open_word and kind == "chord"
+        out.append([(m.group(), cut and m.start() == 0) for m in re.finditer(r"\S+", text)])
+        if text or kind:
+            open_word = bool(text) and not text[-1].isspace()
     return out
 
 
@@ -711,10 +711,10 @@ def _score_bar(raw: dict, before: dict | None) -> dict:
 
     # the pickup of the next row takes the last beats of the bar (at most its second half)
     pickup: list[list[str]] = [[]]
-    first: dict[int, int] = {}          # where the words of each pickup piece start
+    starts = []                         # the first word of each pickup piece
     last = None
-    for piece, found in zip(raw["pickup"], _words(raw["pickup"])):
-        first[id(piece)] = len(pickup[0])
+    for found in _words(raw["pickup"]):
+        starts.append(len(pickup[0]) - bool(found and found[0][1]))
         last = _join(pickup, 0, found, last)
     room = max(1, beats // 2)
     if len(pickup[0]) < room:
@@ -723,25 +723,26 @@ def _score_bar(raw: dict, before: dict | None) -> dict:
         on = [beat for beat, _ in _spread(pickup[0], beats - room, beats)]
     free = min(on, default=beats)       # the bar's own words stay before the pickup when they can
 
-    # the words after a chord are sung while it rings; words before the first chord share its beats
+    # the words after a chord are sung while it rings. Words before the first chord share its beats,
+    # unless dots put that chord later in the bar: then they are sung on the beats before it.
     sung: list[list[str]] = [[] for _ in chords] or [[]]
-    k, last = 0, None
+    early = [] if chords and at[0] > 0 else sung[0]
+    group, last = early, None
     for i, found in enumerate(_words(pieces)):
         if i in chords:
-            k = chords.index(i)
-        last = _join(sung, k, found, last)
-    for k, found in enumerate(sung):
+            group = sung[chords.index(i)]
+        last = _join([group], 0, found, last)
+    spans = [(early, 0, at[0])] if early is not sung[0] else []
+    spans += [(found, at[k] if chords else 0, at[k + 1] if k + 1 < len(at) else beats) for k, found in enumerate(sung)]
+    for found, lo, hi in spans:
         if found:
-            lo = at[k] if chords else 0
-            hi = at[k + 1] if k + 1 < len(at) else beats
             for beat, word in _spread(found, lo, max(lo + 1, min(hi, free) if free > lo else hi)):
                 bar["beats"][beat]["words"].append(word)
     for beat, word in zip(on, pickup[0]):
         bar["beats"][beat]["words"].append(word)
-    for piece in raw["pickup"]:             # a chord written in a pickup sits on the word after it
+    for piece, start in zip(raw["pickup"], starts):    # a chord written in a pickup sits on the word after it
         if piece[0] == "chord":
-            beat = on[first[id(piece)]] if first[id(piece)] < len(on) else beats - 1
-            bar["beats"][beat]["chords"].append((piece[1], piece[3]))
+            bar["beats"][on[start] if 0 <= start < len(on) else beats - 1]["chords"].append((piece[1], piece[3]))
     return bar
 
 
@@ -776,10 +777,11 @@ def read_score(text: str) -> dict:
                 for kind, value, t in cell:
                     numbered[-1].append((kind, value, t, index if kind == "chord" else None))
                     index += kind == "chord"
+            gap = [("", None, " ", None)]     # two pickups in a row stay two words
             if raws:
-                raws[-1]["pickup"] += numbered[0]
+                raws[-1]["pickup"] += gap * bool(raws[-1]["pickup"]) + numbered[0]
             else:
-                waiting += numbered[0]
+                waiting += gap * bool(waiting) + numbered[0]
             for cell in numbered[1:]:
                 raws.append({"section": number, "pieces": cell, "pickup": [], "lead": waiting, "guess": not barred,
                              "time": time, "tempo": tempo})

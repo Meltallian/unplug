@@ -47,7 +47,7 @@ def test_chord_symbols_get_real_accidentals():
 
 
 def test_tempo_mark_is_a_quarter_or_a_dotted_quarter():
-    quarter, dot = "", ""
+    quarter, dot = "\uECA5", "\uECB7"
     assert tempo_mark("88", (4, 4)) == (quarter, "88") and tempo_mark("120", (3, 4)) == (quarter, "120")
     assert tempo_mark("50", (6, 8)) == (quarter + dot, "50") and tempo_mark("60", (12, 8)) == (quarter + dot, "60")
     assert tempo_mark("", (4, 4)) is None and tempo_mark(None, (4, 4)) is None and tempo_mark("fast", (4, 4)) is None
@@ -72,7 +72,7 @@ def test_mei_header_has_title_artist_capo_and_tempo():
     by_type = {r.get("type"): r for r in head.iter(f"{MEI}rend") if r.get("type")}
     assert _text(by_type["title"]) == "Wonderwall" and _text(by_type["artist"]) == "Oasis"
     assert _text(by_type["capo"]) == "Capo 2"
-    assert _text(by_type["tempo"]) == " = 88" and by_type["tempo"].get("halign") == "left"
+    assert _text(by_type["tempo"]) == "\uECA5 = 88" and by_type["tempo"].get("halign") == "left"
     assert "capo" not in {r.get("type") for r in _mei(capo=0).iter(f"{MEI}rend")}      # no capo, no line
 
 
@@ -146,9 +146,9 @@ def test_mei_meter_change_has_time_signature_and_tempo_mark():
     assert [el.tag.replace(MEI, "") for el in verse] == ["scoreDef", "measure", "measure", "measure"]
     assert (verse[0].get("meter.count"), verse[0].get("meter.unit")) == ("4", "4")
     tempos = {m.get("n"): _text(m.find(f"{MEI}tempo")) for m in root.iter(f"{MEI}measure") if m.find(f"{MEI}tempo") is not None}
-    assert tempos == {"3": " = 75", "5": " = 80"}       # the first tempo is in the header
+    assert tempos == {"3": "\uECA5 = 75", "5": "\uECA5 = 80"}       # the first tempo is in the header
     assert [len(m.findall(f".//{MEI}note")) for m in root.iter(f"{MEI}measure")] == [2, 2, 4, 4, 4]
-    assert _text(next(r for r in root.iter(f"{MEI}rend") if r.get("type") == "tempo")) == " = 50"
+    assert _text(next(r for r in root.iter(f"{MEI}rend") if r.get("type") == "tempo")) == "\uECA5\uECB7 = 50"
 
 
 def test_mei_escapes_what_users_write():
@@ -166,8 +166,16 @@ def test_breaks_fill_the_systems():
 
 
 def test_breaks_let_a_section_start_a_system_when_the_one_before_is_full_enough():
-    assert choose_breaks([29] * 6, 10, 100, section_ends={2}) == {3, 6}      # 68 % full: break after bar 2
+    assert choose_breaks([29] * 7, 10, 100, section_ends={2}) == {3, 6}      # 68 % full: break after bar 2
     assert choose_breaks([29] * 6, 10, 100, section_ends={1}) == {4}         # 39 % full: the next section joins
+
+
+def test_breaks_even_out_the_systems():
+    assert choose_breaks([29] * 4, 10, 100) == {3}                           # two and two, not three and one
+    assert choose_breaks([29] * 7, 10, 100) == {4, 6}                        # 3 + 2 + 2, not 3 + 3 + 1
+    assert choose_breaks([29, 29, 29, 60], 10, 100) == {4}                   # only when what moves fits
+    # ... but a bar never leaves the end of its section to do so
+    assert choose_breaks([29] * 4, 10, 100, section_ends={3}) == {4}
 
 
 # --- through Verovio ------------------------------------------------------------------------------
@@ -204,7 +212,7 @@ def test_bar_with_too_many_words_is_set_smaller():
     crowded = "| [C]" + "word " * 30 + "| [G]fine |\n"
     svg = engrave(crowded, width=300).pages[0]
     sizes = {int(size) for size in re.findall(r'<tspan font-size="(\d+)px">(?:word|fine)', svg)}
-    assert max(sizes) == 405 and min(sizes) < 300          # "fine" at the normal size, the crowded bar smaller
+    assert min(sizes) < 0.75 * max(sizes)                  # "fine" at the normal size, the crowded bar smaller
     root = _mei(crowded, small={1: 60})
     syls = root.findall(f".//{MEI}syl")
     assert syls[0].find(f"{MEI}rend").get("fontsize") == "60%" and syls[-1].find(f"{MEI}rend") is None

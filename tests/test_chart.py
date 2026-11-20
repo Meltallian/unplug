@@ -469,6 +469,15 @@ def test_score_of_a_chart_without_bars_is_one_bar_per_chord():
 def test_score_word_cut_by_a_chord_is_hyphenated():
     assert _bars("| Yester[C]day [G]all |\n") == [["C:Yesterday", "", "G:all", ""]]
     assert _bars("| [Am]Yester[C]day |\n") == [["Am:Yester-", "", "C:day", ""]]
+    # only a chord mark cuts a word: two pickups written without a space after them stay two words
+    assert _bars("| [C] |\nhey|\nyou | [G] |\n") == [["C", "", ":hey", ":you"], ["G", "", "", ""]]
+
+
+def test_score_words_before_a_chord_that_dots_put_later():
+    assert _bars("| so . . . [C]what |\n") == [[":so", "", "", "C:what"]]           # three beats of the chord before, C on 4
+    assert _bars("| one two . . [C]three . |\n") == [[":one", ":two", "C:three", ""]]
+    # a chord written in a pickup sits on the word that follows it
+    assert _bars("| [G] |\nAnd [D]now | [C]go |\n") == [["G", "", ":And", "D:now"], ["C:go", "", "", ""]]
 
 
 def test_score_follows_meter_changes():

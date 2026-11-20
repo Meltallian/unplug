@@ -32,7 +32,8 @@ MAX_BARS = 1000                    # refuse to engrave more (a real song has a f
 MARGIN = 20                        # page margin, in Verovio units (the web page has its own padding)
 MARGIN_LEFT = 44                   # ... on the left, where the bar numbers of the systems stand
 LEAD = 17                          # Verovio units between a bar line and the first slash after it
-FILL = 0.985                       # how full a system may be packed (the rest absorbs rounding)
+FILL = 1.0                         # how full a system may be packed (bar widths are measured generously)
+LYRIC_SIZE = 4.0                   # words a little smaller than Verovio's default (4.5): more bars on a phone
 SECTION_FILL = 0.6                 # a section that ends on a system this full takes the line break
 MIN_WORD_SIZE = 50                 # percent: the smallest the words of an overfull bar are set
 CACHE_SIZE = 32                    # engravings kept (one per chart text, width, capo and key) ...
@@ -42,8 +43,9 @@ CACHE_BYTES = 16_000_000           # ... as long as their SVG stays under this i
 _SIGNATURE = {0: 0, 1: -5, 2: 2, 3: -3, 4: 4, 5: -1, 6: 6, 7: 1, 8: -4, 9: 3, 10: -2, 11: 5}
 _PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 _KEY = re.compile(r"^\s*([A-G])([#b]?)(.*)$")
-_NOTE = {2: "", 4: "", 8: "", 16: ""}   # SMuFL metronome notes
-_AUG_DOT = ""
+_NOTE = {2: "\uECA3", 4: "\uECA5", 8: "\uECA7", 16: "\uECA9"}   # SMuFL metronome notes: half, quarter, eighth, 16th
+_AUG_DOT = "\uECB7"                                             # ... and the dot of a dotted note
+_UNPRINTABLE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")       # not allowed in XML
 
 
 def layout_units(width: int) -> int:
@@ -92,9 +94,9 @@ def tempo_mark(tempo: str | None, time: tuple[int, int]) -> tuple[str, str] | No
 
 
 def _el(parent, tag: str, attrs: dict | None = None, text: str | None = None):
-    el = ET.SubElement(parent, f"{{{MEI_NS}}}{tag}", {k: str(v) for k, v in (attrs or {}).items()})
+    el = ET.SubElement(parent, f"{{{MEI_NS}}}{tag}", {k: _UNPRINTABLE.sub("", str(v)) for k, v in (attrs or {}).items()})
     if text is not None:
-        el.text = text
+        el.text = _UNPRINTABLE.sub("", text)
     return el
 
 
@@ -212,7 +214,7 @@ _OPTIONS = {
     "svgViewBox": True, "svgRemoveXlink": True, "svgFormatRaw": True, "scale": 100, "minLastJustification": 0.75,
     # The notes of tempo marks and the accidentals of chord symbols are text in Verovio's music font.
     # By default every SVG embeds that font (60 kB); the page loads it once instead (see music_font).
-    "smuflTextFont": "none",
+    "smuflTextFont": "none", "lyricSize": LYRIC_SIZE,
 }
 FONT_FAMILY = "Leipzig"     # Verovio's default music font, named in the SVG it writes
 
@@ -271,15 +273,28 @@ def _bar_widths(pages: list[str]) -> tuple[list[float], float]:
 def choose_breaks(widths: list[float], lead: float, room: float, section_ends: set[int] = frozenset()) -> set[int]:
     """Bars (numbered from 1) that start a new system: as many bars on a system as fit in `room`
     after the `lead` every system begins with; a section that ends on a system already well filled
-    takes the break, so that most sections start a line."""
-    breaks: set[int] = set()
+    takes the break, so that most sections start a line. Then the systems are evened out: one much
+    emptier than the system before it takes that system's last bars (three bars and one become two
+    and two), except across the start of a section."""
+    starts = [1]
     used = lead
     for n, width in enumerate(widths, start=1):
         if n > 1 and (used + width > room * FILL or (n - 1 in section_ends and used >= room * SECTION_FILL)):
-            breaks.add(n)
+            starts.append(n)
             used = lead
         used += width
-    return breaks
+
+    def filled(first: int, stop: int) -> float:
+        return lead + sum(widths[first - 1:stop - 1])
+
+    for i in range(len(starts) - 1, 0, -1):
+        stop = starts[i + 1] if i + 1 < len(starts) else len(widths) + 1
+        while starts[i] - 1 > starts[i - 1] and starts[i] - 1 not in section_ends:
+            before, here, moved = filled(starts[i - 1], starts[i]), filled(starts[i], stop), widths[starts[i] - 2]
+            if here + moved > room * FILL or abs((before - moved) - (here + moved)) >= abs(before - here):
+                break
+            starts[i] -= 1
+    return set(starts[1:])
 
 
 class TooLong(ValueError):

@@ -52,7 +52,7 @@ def _default_beats(n: int, beats: int) -> list[int]:
     """Where n chords written without dots fall in a bar: one on the "1", two on the "1" and the
     middle (beat 3 of 4, beat 3 of 3, the second dotted beat of 6/8), more spread evenly."""
     if n == 2:
-        return [0, (beats + 1) // 2]
+        return [0, min(beats - 1, (beats + 1) // 2)]
     return [i * beats // n for i in range(n)]
 
 
@@ -123,8 +123,8 @@ def _bar_edges(downbeats: list[float], start: float, end: float, changes: tuple[
         k = (start - anchor) / length
         inside = [anchor + round(k) * length] if anchor + round(k) * length < end else [anchor + (round(k) - 1) * length]
     edges = list(inside)
-    while edges[0] > start + 0.1:                                # continue the grid backwards
-        edges.insert(0, edges[0] - local(edges[0] - 0.1))        # (a pickup bar is clipped at start)
+    while edges[0] - start > 0.25 * local(edges[0] - 0.1):       # continue the grid backwards, unless what
+        edges.insert(0, edges[0] - local(edges[0] - 0.1))        # is left is no bar (a pickup bar is clipped at start)
     later = [d for d in downbeats if d > edges[-1]]
     while edges[-1] < end - 0.25 * local(edges[-1]):             # ... and forwards, closing the last bar
         step = local(edges[-1])
@@ -396,7 +396,17 @@ MIN_REFRAIN = 2      # lines: a shorter repeated run is a refrain line inside a 
 
 
 def _alike(a: str, b: str) -> bool:
-    return bool(a) and bool(b) and SequenceMatcher(None, a, b).ratio() >= SAME_LINE
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if min(len(a), len(b)) < SAME_LINE / (2 - SAME_LINE) * max(len(a), len(b)):
+        return False                    # too different in length to reach SAME_LINE: no need to look
+    matcher = SequenceMatcher(None, a, b, autojunk=False)
+    return matcher.quick_ratio() >= SAME_LINE and matcher.ratio() >= SAME_LINE
+
+
+MAX_FUZZY_LINES = 250   # above this many lines only identical lines count as coming back (keeps it quick)
 
 
 def _split_by_repetition(blocks: list[dict]) -> list[dict]:
@@ -406,7 +416,17 @@ def _split_by_repetition(blocks: list[dict]) -> list[dict]:
     line sung once in between (a chorus twice, a verse sung again after a chorus) are cut where
     the first line of a part comes round again."""
     texts = [_norm(line[2]) for b in blocks if b["kind"] == "lyrics" for line in b["lines"]]
-    comes_back = [any(_alike(a, b) for j, b in enumerate(texts) if j != i) for i, a in enumerate(texts)]
+    times = Counter(texts)
+    comes_back = [bool(a) and times[a] > 1 for a in texts]
+    if len(texts) <= MAX_FUZZY_LINES:
+        once = sorted({a for a in texts if a and times[a] == 1}, key=len)
+        again = set(a for a in texts if a and times[a] > 1)
+        for i, a in enumerate(once):
+            if any(_alike(a, b) for b in once[i + 1:] if len(b) * SAME_LINE <= len(a) * (2 - SAME_LINE)) \
+                    or any(_alike(a, b) for b in again):
+                again.add(a)
+        fuzzy = {a for a in once if a in again or any(_alike(a, b) for b in again)}
+        comes_back = [c or a in fuzzy for c, a in zip(comes_back, texts)]
     out: list[dict] = []
     seen = 0
     openers: list[str] = []                          # first lines of the parts that come back
@@ -461,6 +481,8 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
 
     offset = lyrics.get("offset", 0.0)
     timed = [(ln["t"] + offset, ln["text"]) for ln in lyrics.get("lines", []) if ln.get("t") is not None]
+    if duration:      # lines timed after the end of this recording are not sung in it
+        timed = [(t, text) for t, text in timed if t < duration]
     # when each word was heard, where the lyrics stage could tell (one time per word of the line)
     heard = {(ln["t"] + offset, ln["text"]): [w + offset for w in ln["w"]]
              for ln in lyrics.get("lines", []) if ln.get("t") is not None and ln.get("w")}
@@ -588,7 +610,7 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
                     inside.insert(0, (0.0, shape(current)))
             if inside:
                 last_shown = inside[-1][1]
-            out.append(_place(text, inside))
+            out.append(_place(text.replace("|", "/"), inside))    # a "|" would make the line a row of bars
     return "\n".join(out) + "\n"
 
 
@@ -791,20 +813,6 @@ def _score_bar(raw: dict, before: dict | None) -> dict:
         for beat, old in enumerate(before["beats"][:beats]):
             bar["beats"][beat]["chords"] = [(name, None) for name, _ in old["chords"]]
 
-    # the pickup of the next row takes the last beats of the bar (at most its second half)
-    pickup: list[list[str]] = [[]]
-    starts = []                         # the first word of each pickup piece
-    last = None
-    for found in _words(raw["pickup"]):
-        starts.append(len(pickup[0]) - bool(found and found[0][1]))
-        last = _join(pickup, 0, found, last)
-    room = max(1, beats // 2)
-    if len(pickup[0]) < room:
-        on = [beats - len(pickup[0]) + i for i in range(len(pickup[0]))]
-    else:
-        on = [beat for beat, _ in _spread(pickup[0], beats - room, beats)]
-    free = min(on, default=beats)       # the bar's own words stay before the pickup when they can
-
     # the words after a chord are sung while it rings. Words before the first chord share its beats,
     # unless dots put that chord later in the bar: then they are sung on the beats before it.
     sung: list[list[str]] = [[] for _ in chords] or [[]]
@@ -816,9 +824,26 @@ def _score_bar(raw: dict, before: dict | None) -> dict:
         last = _join([group], 0, found, last)
     spans = [(early, 0, at[0])] if early is not sung[0] else []
     spans += [(found, at[k] if chords else 0, at[k + 1] if k + 1 < len(at) else beats) for k, found in enumerate(sung)]
+
+    # the pickup of the next row takes the last beats of the bar: at most its second half, and
+    # after the beat on which the bar's own last words start, so that the words read in order
+    # (when no beat is left they share the last one, the bar's own words first)
+    pickup: list[list[str]] = [[]]
+    starts = []                         # the first word of each pickup piece
+    last = None
+    for found in _words(raw["pickup"]):
+        starts.append(len(pickup[0]) - bool(found and found[0][1]))
+        last = _join(pickup, 0, found, last)
+    own_last = max((lo for found, lo, _ in spans if found), default=-1)
+    first = min(beats - 1, max(beats - max(1, beats // 2), own_last + 1))
+    if len(pickup[0]) < beats - first:
+        on = [beats - len(pickup[0]) + i for i in range(len(pickup[0]))]
+    else:
+        on = [beat for beat, _ in _spread(pickup[0], first, beats)]
+    free = min(on, default=beats)       # the bar's own words stay before the pickup
     for found, lo, hi in spans:
         if found:
-            for beat, word in _spread(found, lo, max(lo + 1, min(hi, free) if free > lo else hi)):
+            for beat, word in _spread(found, lo, max(lo + 1, min(hi, free))):
                 bar["beats"][beat]["words"].append(word)
     for beat, word in zip(on, pickup[0]):
         bar["beats"][beat]["words"].append(word)
@@ -868,6 +893,9 @@ def read_score(text: str) -> dict:
                 raws.append({"section": number, "pieces": cell, "pickup": [], "lead": waiting, "guess": not barred,
                              "time": time, "tempo": tempo})
                 waiting = []
+        if change := section["changes"].get(len(section["lines"])):    # written after the last row: for what follows
+            time = meter_of(change["time"]) if change["time"] else time
+            tempo = change["tempo"] or tempo
     if waiting:     # nothing but a pickup: give it a bar
         raws.append({"section": 0, "pieces": waiting, "pickup": [], "lead": [], "guess": False,
                      "time": time, "tempo": tempo})

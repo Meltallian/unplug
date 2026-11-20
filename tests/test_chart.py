@@ -550,3 +550,60 @@ def test_the_part_that_comes_back_most_is_the_chorus_a_repeated_verse_stays_a_ve
                           lyrics={"lines": lines}, duration=50.0)
     names = [ln[4:-1] for ln in text.splitlines() if ln.startswith("{c: ")]
     assert names == ["Verse 1", "Verse 2", "Chorus", "Verse 3", "Chorus", "Chorus"]
+
+
+# --- found in review ---------------------------------------------------------------------------
+
+def test_a_pickup_after_a_late_chord_keeps_the_words_in_reading_order():
+    from app.pipeline.chart import read_score
+    bar = read_score("{time: 4/4}\n| [Em]never really had [G]a doubt |\nI don't | [D]believe |\n")["sections"][0]["bars"][0]
+    assert [b["words"] for b in bar["beats"]] == [["never", "really"], ["had"], ["a", "doubt"], ["I", "don't"]]
+
+
+def test_a_time_change_written_before_a_section_header_applies_to_that_section():
+    from app.pipeline.chart import read_score
+    text = "{time: 4/4}\n{tempo: 100}\n{c: Verse}\n| [C]one | [G]two |\n{time: 3/4}\n{tempo: 140}\n{c: Chorus}\n| [Am]three | [F]four |\n"
+    verse, chorus = read_score(text)["sections"]
+    assert [(b["time"], b["tempo"]) for b in verse["bars"]] == [((4, 4), "100")] * 2
+    assert [(b["time"], b["tempo"]) for b in chorus["bars"]] == [((3, 4), "140")] * 2
+
+
+def test_a_bar_of_one_beat_holds_two_chords():
+    from app.pipeline.chart import read_score
+    bar = read_score("{time: 1/4}\n| [C] [G] |\n")["sections"][0]["bars"][0]
+    assert [name for name, _ in bar["beats"][0]["chords"]] == ["C", "G"]
+
+
+def test_lines_timed_after_the_end_of_the_recording_are_left_out():
+    from app.pipeline.chart import build_chordpro
+    analysis = {"capo": 0, "key": {"name": "C"}, "tempo": 120.0, "meter": 4, "downbeats": [0.0, 2.0, 4.0, 6.0]}
+    lines = [{"t": 0.5, "text": "sung here"}, {"t": 30.0, "text": "never in this recording"}]
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=[((0, "maj"), 0.0, 8.0, 16)],
+                          lyrics={"lines": lines}, duration=8.0)
+    assert "sung" in text and "here" in text and "never" not in text
+
+
+def test_no_bar_is_added_before_a_first_downbeat_that_is_almost_at_the_start():
+    from app.pipeline.chart import _bar_edges
+    assert _bar_edges([0.16, 2.16, 4.16, 6.16], 0.0, 8.0)[0] == 0.16
+    assert _bar_edges([1.5, 3.5, 5.5], 0.0, 7.5)[0] == -0.5            # most of a bar before it: that bar exists
+
+
+def test_a_bar_character_in_untimed_lyrics_does_not_make_a_row_of_bars():
+    from app.pipeline.chart import build_chordpro, line_kind, parse_chordpro
+    text = build_chordpro(title="T", artist="", analysis={"capo": 0, "key": {"name": "C"}, "tempo": 90.0},
+                          segments=[((0, "maj"), 0.0, 8.0, 16)], lyrics={"lines": [{"t": None, "text": "one | two"}]}, duration=8.0)
+    lines = [line for section in parse_chordpro(text)["sections"] for line in section["lines"]]
+    assert all(line_kind(line) in ("", "chords-only") for line in lines)
+
+
+def test_long_lyrics_are_split_quickly():
+    import random
+    import time
+    from app.pipeline.chart import _split_by_repetition
+    rng = random.Random(1)
+    words = ["river", "sorrow", "tomorrow", "yesterday", "pretend", "amends", "devour", "breath", "water", "drown"]
+    lines = [(float(i), float(i + 1), " ".join(rng.choice(words) + str(rng.randrange(99)) for _ in range(9))) for i in range(1000)]
+    start = time.time()
+    _split_by_repetition([{"kind": "lyrics", "lines": lines}])
+    assert time.time() - start < 3.0

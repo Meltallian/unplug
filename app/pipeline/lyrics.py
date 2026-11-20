@@ -215,7 +215,13 @@ def match_recordings(reference: np.ndarray, video: np.ndarray, step: float, lo: 
     def unit(m: np.ndarray) -> np.ndarray:
         return m / (np.linalg.norm(m, axis=1, keepdims=True) + 1e-9)
 
-    ref, vid = unit(reference), unit(video)
+    # Only chords can say where a passage is: frames the model hears as "no chord" (the last
+    # column) match any other such frame, at any lag. They are left out, and a window that is
+    # mostly such frames counts as not found.
+    chords_ref = reference[:, :-1] * (np.argmax(reference, axis=1) != reference.shape[1] - 1)[:, None]
+    chords_vid = video[:, :-1] * (np.argmax(video, axis=1) != video.shape[1] - 1)[:, None]
+    voiced = np.any(chords_ref > 0, axis=1)
+    ref, vid = unit(chords_ref), unit(chords_vid)
     lags = np.arange(int(np.floor(lo / step)), int(np.ceil(hi / step)) + 1)
     window, hop = int(WINDOW_S / step), int(HOP_S / step)
     out, found = [], 0
@@ -230,7 +236,8 @@ def match_recordings(reference: np.ndarray, video: np.ndarray, step: float, lo: 
             if agreement > best:
                 best_lag, best = lag, agreement
         centre = (start + len(part) / 2) * step
-        ok = best_lag is not None and best >= MIN_MATCH
+        music = float(np.mean(voiced[start:start + window]))
+        ok = best_lag is not None and music >= 0.5 and best >= MIN_MATCH * music
         found += ok
         out.append((centre, best_lag * step if ok else None))
     if not out or found < MIN_FOUND * len(out):

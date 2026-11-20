@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ chart.meta.get("title") or song.title }} · unplug</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/chart.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
+  <link rel="stylesheet" href="/static/chart.css?v={{ static_version }}">
   <script>/* the view chosen last time, before anything is painted */
     try { document.documentElement.dataset.view = localStorage.getItem("unplug.view") === '"lyrics"' ? "lyrics" : "score"; } catch (e) { document.documentElement.dataset.view = "score"; }
   </script>
@@ -101,6 +101,6 @@
     <button class="link danger" data-pick-remove>Remove this chord</button>
   </div>
 </div>
-<script src="/static/chart.js"></script>
+<script src="/static/chart.js?v={{ static_version }}"></script>
 </body>
 </html>

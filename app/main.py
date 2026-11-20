@@ -27,6 +27,21 @@ HERE = Path(__file__).parent
 app = FastAPI(title="unplug", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
+
+
+def _static_version() -> str:
+    """A short fingerprint of the static files: in their URLs it makes browsers fetch them again
+    after an update (an old chart.js on a new page shows an empty chart)."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for path in sorted((HERE / "static").iterdir()):
+        if path.is_file():
+            digest.update(path.name.encode() + path.read_bytes())
+    return digest.hexdigest()[:10]
+
+
+templates.env.globals["static_version"] = _static_version()
 templates.env.filters["line_kind"] = line_kind
 templates.env.filters["bar_cells"] = bar_cells
 templates.env.filters["bar_row"] = bar_row
@@ -202,7 +217,10 @@ def song_score(song_id: int, width: int = 400, capo: int | None = None, key: int
         return HTMLResponse('<p class="muted">This chart has no chords to engrave yet.</p>')
     note = ""
     if engraving.unbarred:
+        lyrics = _lyrics_info(song)
+        untimed = lyrics.get("source") == "pasted" or (lyrics.get("source") == "lrclib" and not lyrics.get("synced"))
         fix = ("Add | bar lines in Edit, or go back to the automatic chart." if own
+               else "These lyrics have no timing, so the words cannot be put into bars." if untimed
                else "Reprocess the song to get real bars.")
         note = ('<p class="muted small score-note">Lines without bar lines are drawn with one bar '
                 f"per chord. {escape(fix)}</p>")

@@ -176,3 +176,17 @@ def test_downbeats_reported_where_no_music_plays_do_not_change_the_count():
     assert bar_grid(beats, downs).sections()[-1]["meter"] == 4          # believed: the song ends in 4/4
     grid = bar_grid(beats, downs, quiet=quiet)
     assert [s["meter"] for s in grid.sections()] == [6]
+
+
+def test_tempo_of_a_few_uneven_beats_is_a_number():
+    assert tempo(np.array([1.0, 1.5, 2.6])) == 60 / 0.8          # no two gaps alike: the median gap
+    assert tempo(np.array([1.0])) == 0.0 and tempo(np.array([1.0, 1.0])) == 0.0
+
+
+def test_threes_before_a_short_stretch_in_four_are_still_paired_into_six_eight():
+    beats = np.round(0.2 + 0.3 * np.arange(80), 2)                          # 200 beats a minute
+    downs = np.concatenate([beats[0:30:3], beats[30:50:4], beats[50::3]])   # threes, 20 beats in four, threes
+    grid = bar_grid(beats, downs)
+    assert set(grid.size.tolist()) == {6} and set(grid.meter.tolist()) == {6}
+    bars = np.diff(grid.downbeats)
+    assert np.allclose(bars[:4], 1.8) and np.all(bars > 1.0)                # no bar of three beats (0.9 s) left

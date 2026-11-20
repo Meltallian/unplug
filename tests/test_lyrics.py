@@ -123,3 +123,18 @@ def test_without_a_model_the_words_still_get_times(tmp_path, monkeypatch):
     assert all(len(ln["w"]) == len(ln["text"].split()) for ln in placed["lines"])
     same = lyrics.place(TWO, tmp_path, tmp_path / "a.wav", {"duration": 201}, MATCH, None)
     assert same["aligned"] == "same" and [ln["t"] for ln in same["lines"]] == [10.0, 150.0]
+
+
+def test_passages_heard_as_no_chord_do_not_place_the_reference():
+    from app.pipeline.lyrics import match_recordings, shift_at
+    silent_album, silent_video = np.full((2000, 25), 0.01), np.full((2200, 25), 0.01)
+    silent_album[:, 24] = silent_video[:, 24] = 1.0
+    assert match_recordings(silent_album, silent_video, 0.1, lo=-3.0, hi=23.0) is None
+    # a song with 60 s of "no chord" in the middle, 20 s later in the video: the middle follows its neighbours
+    album = _recording(200)
+    album[700:1300] = 0.01
+    album[700:1300, 24] = 1.0
+    intro = np.full((200, 25), 0.01)
+    intro[:, 24] = 1.0
+    shifts = match_recordings(album, np.vstack([intro, album]), 0.1, lo=-3.0, hi=23.0)
+    assert shifts is not None and all(abs(shift - 20.0) < 0.2 for _, shift in shifts)

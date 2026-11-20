@@ -309,8 +309,8 @@ def bar_grid(beats: np.ndarray, downbeats: np.ndarray, novelty: np.ndarray | Non
     evidence = near.astype(float) + _harmony_bonus(novelty, PAIRING_WEIGHT, n)
 
     size, meter = group.copy(), np.where(group == 4, 4, 3)
-    bar_line = np.concatenate([[True], pos[1:] == 0])
-    edges = [0] + [i for i in range(1, n) if bar_line[i] and group[i] != group[i - 1]] + [n]
+    # (the bar length changes at a bar line, except where a short stretch was counted again above)
+    edges = [0] + [i for i in range(1, n) if group[i] != group[i - 1]] + [n]
     for a, b in zip(edges, edges[1:]):                   # each stretch of one bar length
         g = int(group[b - 1])
         if g == 6 and not fast:                          # six slow beats: two bars of a waltz
@@ -346,5 +346,7 @@ def tempo(beats: np.ndarray) -> float:
         return 0.0
     gaps = np.diff(beats)
     median = float(np.median(gaps))
+    if median <= 0:
+        return 0.0
     typical = gaps[np.abs(gaps - median) <= 0.1 * median]
-    return float(60.0 / typical.mean())
+    return float(60.0 / (typical.mean() if len(typical) else median))   # a few uneven beats: no "typical" ones

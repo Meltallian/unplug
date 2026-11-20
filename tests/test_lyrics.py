@@ -60,22 +60,66 @@ def test_another_recording_is_not_taken_for_the_reference():
     assert match_recordings(_recording(200, seed=1), _recording(220, seed=2), 0.1, lo=-3.0, hi=23.0) is None
 
 
-def test_lines_are_placed_by_the_reference_and_fall_back_to_activity(tmp_path, monkeypatch):
-    from app.pipeline import lyrics
-    lines = [{"t": 10.0, "text": "one"}, {"t": 150.0, "text": "two"}]
-    meta, match = {"duration": 220, "youtube_id": "v"}, {"duration": 200.0, "artistName": "A", "trackName": "B"}
-    monkeypatch.setattr(lyrics, "reference_shifts", lambda *a: [(15.0, 9.0), (145.0, 13.0)])
-    placed = lyrics.place(lines, tmp_path, tmp_path / "a.wav", meta, match, None)
-    assert placed["aligned"] == "reference" and placed["offset"] == 0.0
-    assert placed["lines"] == [{"t": 19.0, "lrc_t": 10.0, "text": "one"}, {"t": 163.0, "lrc_t": 150.0, "text": "two"}]
-    # placing again starts from the LRCLIB times, not from the placed ones
-    assert lyrics.place(placed["lines"], tmp_path, tmp_path / "a.wav", meta, match, None)["lines"] == placed["lines"]
+def _listening(monkeypatch, heard_share: dict):
+    """words.align replaced: a line is "heard" if its video time is one of heard_share's keys' truths."""
+    from app.pipeline import lyrics, words
+    import librosa
+    monkeypatch.setattr(librosa, "load", lambda *a, **k: (np.zeros(16000, dtype=np.float32), 16000))
+    monkeypatch.setattr(words, "language_of", lambda y, at=0.0: "en")
 
-    def no_reference(*a):
-        raise RuntimeError("no network")
-    monkeypatch.setattr(lyrics, "reference_shifts", no_reference)
+    def align(lines, y, sr, language=None, report=None):
+        for i, ln in enumerate(lines):
+            report.append({"line": i, "heard": ln["t"] in heard_share, "sure": 0.5, "late": 0.0})
+        return [[ln["t"]] * len(ln["text"].split()) for ln in lines]
+    monkeypatch.setattr(words, "align", align)
+
+
+META, MATCH = {"duration": 220, "youtube_id": "v"}, {"duration": 200.0, "artistName": "A", "trackName": "B"}
+TWO = [{"t": 10.0, "text": "one"}, {"t": 150.0, "text": "two words"}]
+
+
+def test_times_that_are_heard_in_place_are_kept(tmp_path, monkeypatch):
+    from app.pipeline import lyrics
+    _listening(monkeypatch, {10.0, 150.0})
+    monkeypatch.setattr(lyrics, "reference_shifts", lambda *a: 1 / 0)
+    placed = lyrics.place(TWO, tmp_path, tmp_path / "a.wav", META, MATCH, None)
+    assert placed["aligned"] == "same" and placed["heard"] == 1.0 and placed["words"] == "heard"
+    assert placed["lines"] == [{"t": 10.0, "lrc_t": 10.0, "text": "one", "w": [10.0]},
+                               {"t": 150.0, "lrc_t": 150.0, "text": "two words", "w": [150.0, 150.0]}]
+
+
+def test_lines_not_heard_in_place_are_placed_by_the_reference_recording(tmp_path, monkeypatch):
+    from app.pipeline import lyrics
+    _listening(monkeypatch, {19.0, 163.0})
+    monkeypatch.setattr(lyrics, "reference_shifts", lambda *a: [(15.0, 9.0), (145.0, 13.0)])
+    placed = lyrics.place(TWO, tmp_path, tmp_path / "a.wav", META, MATCH, None)
+    assert placed["aligned"] == "reference" and [ln["t"] for ln in placed["lines"]] == [19.0, 163.0]
+    # placing again starts from the LRCLIB times, not from the placed ones
+    again = lyrics.place(placed["lines"], tmp_path, tmp_path / "a.wav", META, MATCH, None)
+    assert [ln["t"] for ln in again["lines"]] == [19.0, 163.0]
+
+
+def test_same_length_but_wrong_times_are_fixed_by_ear(tmp_path, monkeypatch):
+    from app.pipeline import lyrics, words
+    _listening(monkeypatch, {34.0, 171.0})
+    monkeypatch.setattr(lyrics, "reference_shifts", lambda *a: 1 / 0)          # same length: never asked
+    monkeypatch.setattr(words, "transcribe", lambda y, language=None: [])
+    monkeypatch.setattr(words, "find_lines", lambda lines, heard: ([24.0, 21.0], 1.0))
+    placed = lyrics.place(TWO, tmp_path, tmp_path / "a.wav", {"duration": 201}, MATCH, None)
+    assert placed["aligned"] == "heard" and [ln["t"] for ln in placed["lines"]] == [34.0, 171.0]
+
+
+def test_without_a_model_the_words_still_get_times(tmp_path, monkeypatch):
+    from app.pipeline import lyrics
+    import librosa
+
+    def broken(*a, **k):
+        raise RuntimeError("no audio")
+    monkeypatch.setattr(librosa, "load", broken)
+    monkeypatch.setattr(lyrics, "reference_shifts", broken)
     monkeypatch.setattr(lyrics, "vocal_activity", lambda wav: (np.zeros(2200), 0.1))
-    fallback = lyrics.place(placed["lines"], tmp_path, tmp_path / "a.wav", meta, match, None)
-    assert fallback["aligned"] == "activity" and [ln["t"] for ln in fallback["lines"]] == [10.0, 150.0]
-    same = lyrics.place(lines, tmp_path, tmp_path / "a.wav", {"duration": 201}, match, None)
-    assert same == {"lines": lines, "offset": 0.0, "aligned": "same"}
+    placed = lyrics.place(TWO, tmp_path, tmp_path / "a.wav", META, MATCH, None)
+    assert placed["aligned"] == "activity" and placed["words"] == "syllables"
+    assert all(len(ln["w"]) == len(ln["text"].split()) for ln in placed["lines"])
+    same = lyrics.place(TWO, tmp_path, tmp_path / "a.wav", {"duration": 201}, MATCH, None)
+    assert same["aligned"] == "same" and [ln["t"] for ln in same["lines"]] == [10.0, 150.0]

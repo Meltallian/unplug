@@ -292,8 +292,9 @@ def _sung_cell(marks: list[tuple[str, float | None]], words: list[tuple[float, s
 
 def _sung_sections(blocks: list[dict], edges: list[float], segs: list[tuple], shape, meters: _Meters) -> list[str]:
     """Every section as rows of bars, on one bar grid for the whole song. A sung line is one row:
-    its words go in the bar where they start (linear interpolation over the time the line owns),
-    and the bars up to the next sung line stay in the row."""
+    its words go in the bar where they start (the time each word was heard if the lyrics stage
+    could tell, else linear interpolation over the time the line owns), and the bars up to the
+    next sung line stay in the row."""
     count = len(edges) - 1
     bars = _bar_chords(edges, segs, shape, meters)
 
@@ -311,12 +312,14 @@ def _sung_sections(blocks: list[dict], edges: list[float], segs: list[tuple], sh
     has_intro = blocks[0]["kind"] == "inst"
     for b in blocks:
         b["plans"] = []
-        for t, end, text in b.get("lines", ()):
+        for t, end, text, *rest in b.get("lines", ()):
             span = max(end - t, 0.5)
             words, floor = [], max(0, last_sung)
-            for m in re.finditer(r"\S+", text):
+            found = list(re.finditer(r"\S+", text))
+            heard = rest[0] if rest and rest[0] and len(rest[0]) == len(found) else None
+            for k, m in enumerate(found):
                 if word := _lyric_word(m.group()):
-                    at = t + span * m.start() / len(text)
+                    at = heard[k] if heard else t + span * m.start() / len(text)
                     floor = max(floor, bar_at(at))
                     words.append((floor, at, word))
             if not words:
@@ -401,7 +404,7 @@ def _split_by_repetition(blocks: list[dict]) -> list[dict]:
     other way: synced lyrics often arrive as one long block, and the part that comes back is the
     chorus. Each lyric block gets "repeats": True/False. A chorus sung twice in a row is cut where
     its first line comes round again."""
-    texts = [_norm(text) for b in blocks if b["kind"] == "lyrics" for *_, text in b["lines"]]
+    texts = [_norm(line[2]) for b in blocks if b["kind"] == "lyrics" for line in b["lines"]]
     comes_back = [any(_alike(a, b) for j, b in enumerate(texts) if j != i) for i, a in enumerate(texts)]
     out: list[dict] = []
     seen = 0
@@ -454,6 +457,9 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
 
     offset = lyrics.get("offset", 0.0)
     timed = [(ln["t"] + offset, ln["text"]) for ln in lyrics.get("lines", []) if ln.get("t") is not None]
+    # when each word was heard, where the lyrics stage could tell (one time per word of the line)
+    heard = {(ln["t"] + offset, ln["text"]): [w + offset for w in ln["w"]]
+             for ln in lyrics.get("lines", []) if ln.get("t") is not None and ln.get("w")}
     synced = bool(timed)
     if not timed and lyrics.get("lines"):
         # plain lyrics: spread the lines evenly over the part of the song that has chords
@@ -488,7 +494,7 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
             blocks.append({"kind": "inst", "start": prev_end, "end": t})
         if not blocks or blocks[-1]["kind"] != "lyrics" or blocks[-1].get("closed"):
             blocks.append({"kind": "lyrics", "lines": []})
-        blocks[-1]["lines"].append((t, end, text))
+        blocks[-1]["lines"].append((t, end, text, heard.get((t, text))))
         prev_end = end
     if duration - prev_end >= 2.0:
         blocks.append({"kind": "inst", "start": prev_end, "end": duration})
@@ -496,7 +502,7 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
     # 2. Name the sections.
     blocks = _split_by_repetition(blocks)
     lyric_blocks = [b for b in blocks if b["kind"] == "lyrics"]
-    keys = Counter(_norm(" ".join(x for *_, x in b["lines"])) for b in lyric_blocks)
+    keys = Counter(_norm(" ".join(line[2] for line in b["lines"])) for b in lyric_blocks)
     chorus_key = None
     if keys:
         candidate, count = max(keys.items(), key=lambda kv: (kv[1], len(kv[0])))
@@ -511,7 +517,7 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
             b["name"] = "Intro" if b is blocks[0] else ("Outro" if b is blocks[-1] else "Interlude")
             if n_inst == 1 and b is not blocks[0] and b is not blocks[-1]:
                 b["name"] = "Interlude"
-        elif b.get("repeats") and len(b["lines"]) >= MIN_REFRAIN or _norm(" ".join(x for *_, x in b["lines"])) == chorus_key:
+        elif b.get("repeats") and len(b["lines"]) >= MIN_REFRAIN or _norm(" ".join(line[2] for line in b["lines"])) == chorus_key:
             b["name"] = "Chorus"
         else:
             verse += 1
@@ -548,7 +554,7 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
             continue
         out += ["", f"{{c: {b['name']}}}"]
         last_shown = None
-        for t, end, text in b["lines"]:
+        for t, end, text, *_ in b["lines"]:
             span = max(end - t, 0.5)
             inside = [((s - t) / span, shape(c)) for c, s, *_ in segs if t <= s < end]
             # Show the chord already ringing at the line start only when it isn't simply

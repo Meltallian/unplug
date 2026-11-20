@@ -1,19 +1,26 @@
 """Stage 6: lyrics from LRCLIB (synced if possible), placed on the video's timeline.
 
-LRCLIB times belong to the recording the lyrics were timed on, usually the album track. A video
-often adds an intro, an outro or a scene. Two ways to find where each line is sung in the video:
+LRCLIB times belong to the recording the lyrics were timed on, usually the album track, and are
+not always right for it either. A video often adds an intro, an outro or a scene. So the times
+are checked by listening (words.py: are the lines heard where their times say?) and, when they
+are not, the lines are placed again:
 
-1. Reference recording (preferred): the album track is looked up on YouTube by its exact length,
-   and the two recordings are matched by their chords, window by window. Exact to a fraction of
-   a second, and it follows a scene inserted in the middle.
-2. Vocal activity (fallback): one shift for the whole song, the one that puts sung lines on
+1. Reference recording: the album track is looked up on YouTube by its exact length, and the two
+   recordings are matched by their chords, window by window. Exact to a fraction of a second,
+   and it follows a scene inserted in the middle. Only possible when the lengths differ.
+2. By ear: the lines are looked for in what the model hears sung, each line on its own.
+3. Vocal activity (last resort): one shift for the whole song, the one that puts sung lines on
    activity in the vocal band, among those that keep every line on music.
 
+Then every word gets its own time: the chord goes over the word sung when it changes.
+
 Writes lyrics.json:
-  {"source": "lrclib"|"pasted"|"none", "synced": bool, "lines": [{"t": float|None, "text": str}],
-   "offset": float, "match": {...}, "aligned": "reference"|"activity"|"same"}
-With "reference" the line times are already video times (the LRCLIB time is kept as "lrc_t")
-and "offset" is 0.
+  {"source": "lrclib"|"pasted"|"none", "synced": bool, "offset": float, "match": {...},
+   "lines": [{"t": float|None, "text": str, "lrc_t": float, "w": [float, ...]}],
+   "aligned": "same"|"reference"|"heard"|"activity", "heard": share of lines heard in place,
+   "words": "heard"|"syllables"}
+Line times ("t") and word times ("w", one per word of the line) are video times; "offset" is 0
+for lyrics placed here (it remains for older files) and "lrc_t" keeps the LRCLIB time.
 """
 
 import json
@@ -30,7 +37,7 @@ _NOISE = re.compile(
     re.I)
 _VARIANTS = ("unplugged", "acoustic", "live", "remix", "demo", "piano", "orchestral")
 SAME_LENGTH = 3.0  # seconds; lyrics this close in length to the video need no offset
-OFFSET_VERSION = 3  # bump when the placement changes: cached lyrics are placed again
+OFFSET_VERSION = 5  # bump when the placement changes: cached lyrics are placed again
 REFERENCE_TOL = 2.0  # seconds; the reference recording must be this close in length to the lyrics' own
 WINDOW_S, HOP_S = 30.0, 10.0   # the recordings are matched in windows of this length, this far apart
 MIN_MATCH = 0.6     # mean chord agreement (0..1) a window needs to count as found in the video
@@ -285,26 +292,84 @@ def music_stretches(analysis: dict | None) -> list[tuple[float, float]] | None:
     return [(a, b) for a, b in out] or None
 
 
+FITS = 0.35   # share of lines that must be heard where their times say for the times to be believed
+              # (on test songs: 65 % of lines in the right place are heard, 4 % of lines 17 s away)
+
+
 def place(lines: list[dict], song_dir: Path, wav: Path, meta: dict, match: dict, analysis: dict | None,
           cookies_file: Path | None = None) -> dict:
-    """Put synced lines on the video's timeline: {"lines", "offset", "aligned"} (see the module docstring)."""
+    """Put synced lines and their words on the video's timeline.
+
+    Returns {"lines": [{"t", "lrc_t", "text", "w"}], "offset": 0.0, "aligned": how the lines were
+    placed, "words": how the words were, "heard": share of lines heard where they were put}.
+    The LRCLIB times are tried as they are first; if the lines are not heard there, the lyrics'
+    own recording is looked up and matched to the video ("reference"), or the lines are looked
+    for in what is sung ("heard"); vocal activity is the last resort. Never raises."""
+    from app.pipeline import words
+
     lines = [{"t": ln.get("lrc_t", ln["t"]), "text": ln["text"]} for ln in lines]       # back to LRCLIB times
     video_duration, duration = meta.get("duration") or 0, match.get("duration")
-    if not duration or abs(video_duration - duration) <= SAME_LENGTH:
-        return {"lines": lines, "offset": 0.0, "aligned": "same"}   # same length: almost surely the same audio
+    differ = bool(duration) and abs(video_duration - duration) > SAME_LENGTH
+
     try:
-        shifts = reference_shifts(song_dir, wav, meta, match, cookies_file)
-    except Exception:      # lyrics are optional: no network, no such upload, a failed download ...
-        shifts = None
-    if shifts:
-        placed = [{"t": round(ln["t"] + shift_at(shifts, ln["t"]), 2), "lrc_t": ln["t"], "text": ln["text"]} for ln in lines]
-        return {"lines": placed, "offset": 0.0, "aligned": "reference"}
-    try:
-        act, hop_s = vocal_activity(wav)
-        offset = estimate_offset(lines, act, hop_s, video_duration, duration, music_stretches(analysis))
-    except Exception:
-        offset = 0.0
-    return {"lines": lines, "offset": offset, "aligned": "activity"}
+        import librosa
+
+        y, _ = librosa.load(wav, sr=16000, mono=True)
+        first = next((ln["t"] for ln in lines if ln["text"]), 0.0)
+        language = words.language_of(y, first)
+    except Exception:      # no audio, no model: the old way, unchecked
+        y = language = None
+
+    def listen(shifts: list[float]) -> tuple[list[dict], float]:
+        """The lines moved by `shifts` with their word times, and the share of sung lines heard there."""
+        moved = [{"t": round(ln["t"] + s, 2), "lrc_t": ln["t"], "text": ln["text"]} for ln, s in zip(lines, shifts)]
+        sung = [ln for ln in moved if ln["text"]]
+        times, share = None, 0.0
+        if y is not None:
+            try:
+                report: list[dict] = []
+                times = words.align(sung, y, 16000, language, report=report)
+                share = float(np.mean([r["heard"] for r in report])) if report else 0.0
+            except Exception:
+                times = None
+        for ln, ts in zip(sung, times if times is not None else words.by_syllables(sung)):
+            ln["w"] = ts
+        return moved, share
+
+    def done(how: str, placed: tuple[list[dict], float]) -> dict:
+        return {"lines": placed[0], "offset": 0.0, "aligned": how, "heard": round(placed[1], 2),
+                "words": "heard" if placed[1] > 0 else "syllables"}
+
+    as_timed = listen([0.0] * len(lines))
+    if as_timed[1] >= FITS or (y is None and not differ):
+        return done("same", as_timed)
+
+    if differ:
+        try:
+            shifts = reference_shifts(song_dir, wav, meta, match, cookies_file)
+        except Exception:      # lyrics are optional: no network, no such upload, a failed download ...
+            shifts = None
+        if shifts:
+            return done("reference", listen([shift_at(shifts, ln["t"]) for ln in lines]))
+
+    if y is not None:
+        try:
+            found = words.find_lines(lines, words.transcribe(y, language))
+        except Exception:
+            found = None
+        if found:
+            by_ear = listen(found[0])
+            if by_ear[1] > as_timed[1]:
+                return done("heard", by_ear)
+
+    if differ:
+        try:
+            act, hop_s = vocal_activity(wav)
+            offset = estimate_offset(lines, act, hop_s, video_duration, duration, music_stretches(analysis))
+            return done("activity", listen([offset] * len(lines)))
+        except Exception:
+            pass
+    return done("same", as_timed)
 
 
 def fetch_lyrics(song_dir: Path, wav: Path, meta: dict, analysis: dict | None = None,

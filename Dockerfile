@@ -21,6 +21,10 @@ ENV BEAT_THIS_CHECKPOINT=/opt/models/beat_this-final0.ckpt
 ADD --chmod=644 --checksum=sha256:1673d23f8f9a55ae7f9e8b80a51da616debb22675b8d8b67ea6ce0ef37b0ab51 \
     https://raw.githubusercontent.com/jayg996/BTC-ISMIR19/2682317be668032e6e4b269ded36adaa2ad57df0/test/btc_model_large_voca.pt /opt/models/btc_model_large_voca.pt
 ENV BTC_CHECKPOINT=/opt/models/btc_model_large_voca.pt
+# Whisper "tiny" (OpenAI, MIT licence): hears where each word of the lyrics is sung
+ADD --chmod=644 --checksum=sha256:65147644a518d12f04e32d6f3b26facc3f8dd46e5390956a9424a650c0ce22b9 \
+    https://openaipublic.azureedge.net/main/whisper/models/65147644a518d12f04e32d6f3b26facc3f8dd46e5390956a9424a650c0ce22b9/tiny.pt /opt/models/whisper-tiny.pt
+ENV WHISPER_MODEL=/opt/models/whisper-tiny.pt
 
 WORKDIR /srv
 COPY pyproject.toml uv.lock ./

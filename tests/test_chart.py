@@ -522,3 +522,17 @@ def test_a_refrain_line_inside_a_verse_does_not_cut_it():
     block = {"kind": "lyrics", "lines": [(float(i), float(i + 1), text) for i, text in enumerate(texts)]}
     parts = _split_by_repetition([block])
     assert [(p["repeats"], len(p["lines"])) for p in parts] == [(False, 8)]
+
+
+def test_words_go_in_the_bar_where_they_were_heard():
+    from app.pipeline.chart import build_chordpro
+    analysis = {"capo": 0, "key": {"name": "C"}, "tempo": 120.0, "meter": 4, "downbeats": [0.0, 2.0, 4.0, 6.0, 8.0]}
+    segments = [((0, "maj"), 0.0, 4.0, 8), ((7, "maj"), 4.0, 8.0, 8)]
+    line = {"t": 0.2, "text": "one two three four"}
+    by_position = build_chordpro(title="T", artist="", analysis=analysis, segments=segments,
+                                 lyrics={"lines": [line]}, duration=8.0)
+    # sung fast at the start, the last word held over the chord change
+    heard = build_chordpro(title="T", artist="", analysis=analysis, segments=segments,
+                           lyrics={"lines": [{**line, "w": [0.2, 0.6, 1.0, 4.1]}]}, duration=8.0)
+    assert "| [C]one two three | | [G]four |" in heard
+    assert by_position != heard

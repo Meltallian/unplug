@@ -1,4 +1,5 @@
-"""Stages 3-4: tuning, beats, chroma (+ bass chroma), key-aware template matching, HMM smoothing.
+"""Stages 3-4: tuning, beats + bar grid, chroma (+ bass chroma), key-aware template matching,
+HMM smoothing in which chords change on the "1" of a bar, less often mid-bar, rarely elsewhere.
 
 Two parts so methods can be compared quickly:
   features()  slow, cached in cache/features-<FEATURES_VERSION>.npz
@@ -14,15 +15,18 @@ from pathlib import Path
 import librosa
 import numpy as np
 
+from app.pipeline import rhythm
 from app.music import ALL_CHORDS, chord_name, choose_capo, diatonic, estimate_key, key_name, triad_pcs
 
-FEATURES_VERSION = "f2"
+FEATURES_VERSION = "f4"
 HOP = 512
 
 
 @dataclass(frozen=True)
 class Params:
-    self_transition: float = 0.85   # HMM: how strongly a chord tends to continue to the next beat
+    change_bar: float = 0.3         # HMM: chance the chord changes on the "1" of a bar
+    change_half: float = 0.05       # ... in the middle of a 4/4 or 6/8 bar
+    change_off: float = 0.001       # ... on any other beat
     out_of_key_prior: float = 0.25  # relative prior weight for chords outside the detected key
     sharpness: float = 12.0         # softmax temperature on template similarity
     silence_ratio: float = 0.08     # beats quieter than this × median RMS become N.C.
@@ -32,7 +36,7 @@ class Params:
 
 
 PARAMS = Params()
-VERSION = "bass-1b"
+VERSION = "bars-2"
 
 
 def _templates(p: Params) -> np.ndarray:
@@ -50,7 +54,7 @@ def features(wav: Path) -> dict:
         try:
             with np.load(cache) as z:
                 feats = {k: z[k] for k in z.files}
-            if {"chroma", "bass", "rms", "times", "tuning", "tempo"} <= feats.keys():
+            if {"chroma", "bass", "rms", "times", "pos", "meter", "tuning", "tempo"} <= feats.keys():
                 return feats
         except Exception:  # corrupt or partial cache (e.g. BadZipFile): recompute
             pass
@@ -68,15 +72,23 @@ def features(wav: Path) -> dict:
     chroma, bass = chroma[:, :n], bass[:, :n]
     rms = librosa.feature.rms(y=y, hop_length=HOP)[0][:n]
 
-    tempo, beats = librosa.beat.beat_track(y=y, sr=sr, hop_length=HOP)
-    bounds = librosa.util.fix_frames(beats, x_min=0, x_max=n)
+    beat_times, downbeat_times = rhythm.track(y, sr)
+    meter, beat_pos = rhythm.fit_grid(beat_times, downbeat_times)
+    frames = librosa.time_to_frames(beat_times, sr=sr, hop_length=HOP)
+    keep = (frames > 0) & (frames < n) & np.concatenate([[True], np.diff(frames) > 0])
+    frames, beat_pos = frames[keep], beat_pos[keep]
+    bounds = np.concatenate([[0], frames, [n]])
+    # the stretch before the first beat has no bar position (-1)
+    pos = np.concatenate([[-1], beat_pos])
     feats = {
         "chroma": librosa.util.sync(chroma, bounds, aggregate=np.median),
         "bass": librosa.util.sync(bass, bounds, aggregate=np.median),
         "rms": librosa.util.sync(rms[np.newaxis, :], bounds, aggregate=np.mean)[0],
         "times": librosa.frames_to_time(bounds, sr=sr, hop_length=HOP),
+        "pos": pos,
+        "meter": np.array(meter),
         "tuning": np.array(tuning),
-        "tempo": np.array(float(np.atleast_1d(tempo)[0])),
+        "tempo": np.array(rhythm.tempo(beat_times)),
     }
     tmp = cache.with_name(f"{cache.stem}.{os.getpid()}.tmp.npz")
     try:
@@ -92,6 +104,36 @@ def display_tempo(bpm: float) -> float:
     while 135 < bpm < 10_000:
         bpm /= 2
     return bpm
+
+
+def _change_prob(pos: np.ndarray, meter: int, p: Params) -> np.ndarray:
+    """Chance of a chord change on each beat, from its position in the bar."""
+    c = np.full(len(pos), p.change_off)
+    c[pos <= 0] = p.change_bar                       # the "1" (and the stretch before the first beat)
+    if meter % 2 == 0:
+        c[pos == meter // 2] = p.change_half
+    return c
+
+
+def _viterbi(log_lik: np.ndarray, change: np.ndarray) -> np.ndarray:
+    """Most likely state path when, at step t, the state changes with probability change[t]
+    (spread evenly over the other states)."""
+    k, n = log_lik.shape
+    stay, move = np.log1p(-change), np.log(change / (k - 1))
+    score = log_lik[:, 0].copy()
+    back = np.zeros((n, k), dtype=int)
+    for t in range(1, n):
+        best = int(np.argmax(score))
+        jump = score[best] + move[t]
+        cont = score + stay[t]
+        take_jump = jump > cont
+        back[t] = np.where(take_jump, best, np.arange(k))
+        score = np.where(take_jump, jump, cont) + log_lik[:, t]
+    path = np.zeros(n, dtype=int)
+    path[-1] = int(np.argmax(score))
+    for t in range(n - 1, 0, -1):
+        path[t - 1] = back[t, path[t]]
+    return path
 
 
 def decode(feats: dict, p: Params = PARAMS) -> dict:
@@ -113,9 +155,9 @@ def decode(feats: dict, p: Params = PARAMS) -> dict:
     lik = np.vstack([lik, n_row])
     prob = lik / lik.sum(axis=0, keepdims=True)
 
-    trans = librosa.sequence.transition_loop(len(ALL_CHORDS) + 1, p.self_transition)
-    path = librosa.sequence.viterbi_discriminative(prob, trans)
-
+    pos = feats.get("pos", np.zeros(prob.shape[1], dtype=int))
+    meter = int(feats.get("meter", 4))
+    path = _viterbi(np.log(prob + 1e-12), _change_prob(pos, meter, p))
     labels = [ALL_CHORDS[i] if i < len(ALL_CHORDS) else "N" for i in path]
     segments: list[dict] = []
     for i, label in enumerate(labels):
@@ -123,7 +165,8 @@ def decode(feats: dict, p: Params = PARAMS) -> dict:
             segments[-1]["end"] = float(times[i + 1])
             segments[-1]["beats"] += 1
         else:
-            segments.append({"chord": label, "start": float(times[i]), "end": float(times[i + 1]), "beats": 1})
+            segments.append({"chord": label, "start": float(times[i]), "end": float(times[i + 1]), "beats": 1,
+                             "on_bar": bool(pos[i] <= 0)})
 
     weighted = [(s["chord"], s["end"] - s["start"]) for s in segments if s["chord"] != "N"]
     return {
@@ -131,6 +174,8 @@ def decode(feats: dict, p: Params = PARAMS) -> dict:
         "params": asdict(p),
         "tuning_semitones": round(float(feats["tuning"]), 3),
         "tempo": display_tempo(float(feats["tempo"])),
+        "meter": meter,
+        "downbeats": [round(float(t), 3) for t, q in zip(times, pos) if q == 0],
         "key": {"tonic": key[0], "mode": key[1], "name": key_name(key)},
         "capo": choose_capo(weighted),
         "segments": [

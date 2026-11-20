@@ -21,20 +21,30 @@
   .ch { color: #b4441c; font-weight: bold; min-height: 1.15em; padding-right: 1.2mm; }
   .chords-only .tx { display: none; }
   .chords-only .ch { padding-right: 3mm; }
+  .bars { display: grid; grid-template-columns: repeat(4, 1fr); max-width: 80mm; }
+  .bars .cell { border-left: 0.3mm solid #bbb; padding-left: 1.5mm; }
+  .bars .cell:nth-child(4n), .bars .cell:last-child { border-right: 0.3mm solid #bbb; }
+  .bars .ch { min-height: 0; padding-right: 1.2mm; }
+  .bars .rep { color: #999; }
   .foot { margin-top: 4mm; font-size: 7.5pt; color: #999; }
 </style>
 </head>
 <body>
   <h1>{{ title }}</h1>
   {% if artist %}<div class="artist">{{ artist }}</div>{% endif %}
-  <div class="facts">{% if key %}Key <b>{{ key }}</b> · {% endif %}{% if capo %}Capo <b>{{ capo }}</b>{% else %}<b>No capo</b>{% endif %}{% if tempo %} · {{ tempo }} bpm{% endif %}</div>
+  <div class="facts">{% if key %}Key <b>{{ key }}</b> · {% endif %}{% if capo %}Capo <b>{{ capo }}</b>{% else %}<b>No capo</b>{% endif %}{% if tempo %} · {{ tempo }} bpm{% endif %}{% if time %} · {{ time }}{% endif %}</div>
   <div class="diagrams">{% for name, svg in diagrams %}<div class="diagram">{{ svg | safe }}<div>{{ name }}</div></div>{% endfor %}</div>
   <div class="cols">
   {% for section in sections %}
     <section>
       {% if section.name %}<h2>[{{ section.name }}]</h2>{% endif %}
       {% for line in section.lines %}
-      <div class="line{% if line | selectattr(1) | map(attribute=1) | join | trim == '' %} chords-only{% endif %}">{% for chord, text in line %}<span class="seg"><b class="ch">{{ chord or "" }}</b><span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
+      {% set kind = line | line_kind %}
+      {% if kind == "bars" %}
+      <div class="line bars">{% for cell in line | bar_cells %}<span class="cell">{% for what, v in cell %}{% if what == "chord" %}<b class="ch">{{ v }}</b>{% else %}<span class="rep">{{ v }}</span>{% endif %}{% endfor %}</span>{% endfor %}</div>
+      {% else %}
+      <div class="line {{ kind }}">{% for chord, text in line %}<span class="seg"><b class="ch">{{ chord or "" }}</b><span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
+      {% endif %}
       {% endfor %}
     </section>
   {% endfor %}

@@ -18,7 +18,7 @@ from app.auth import CurrentUser, current_user
 from app.config import Settings, get_settings
 from app.db import SessionLocal, get_session
 from app.models import Chart, LibraryEntry, Song, SongStatus
-from app.pipeline.chart import parse_chordpro
+from app.pipeline.chart import bar_cells, line_kind, parse_chordpro
 from app.youtube import parse_youtube_id
 
 HERE = Path(__file__).parent
@@ -27,6 +27,8 @@ HERE = Path(__file__).parent
 app = FastAPI(title="unplug", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
+templates.env.filters["line_kind"] = line_kind
+templates.env.filters["bar_cells"] = bar_cells
 
 PENDING = (SongStatus.queued, SongStatus.processing)
 # A processing song with no stage update for this long is considered stuck and may be reprocessed.
@@ -225,7 +227,7 @@ def chart_pdf(request: Request, song_id: int, capo: int | None = None, key: int 
     html = templates.get_template("pdf.html").render(
         title=meta.get("title") or song.title, artist=meta.get("artist") or song.artist or "",
         key=move_chord_name(meta["key"], key) if meta.get("key") else "", capo=capo,
-        tempo=meta.get("tempo", ""), sections=sections,
+        tempo=meta.get("tempo", ""), time=meta.get("time", ""), sections=sections,
         diagrams=[(k, diagram_svg(k)) for k in used])
     if not _PDF_LOCK.acquire(timeout=30):
         raise HTTPException(503, "Busy printing another chart; try again in a moment.")

@@ -9,11 +9,15 @@ import re
 from collections import Counter
 
 from app.music import chord_name, transpose
+from app.pipeline.rhythm import time_signature
 
 MIN_BEATS = 2            # chords shorter than this are merged into the previous one on the chart
 MAX_LINE = 8.0           # a lyric line "owns" at most this many seconds after its start
 INSTRUMENTAL_GAP = 6.0   # a gap this long without lyrics becomes its own section
 CHORDS_PER_ROW = 4
+BARS_PER_ROW = 4
+REPEAT_BAR = "%"         # repeat the previous bar (only written after a single-chord bar)
+NO_CHORD = "N.C."        # a silent bar inside a stretch of bars
 
 
 def _clean_segments(segments: list[tuple]) -> list[tuple]:
@@ -55,6 +59,63 @@ def _chord_rows(names: list[str]) -> list[str]:
     return ["  ".join(f"[{n}]" for n in row) for row in rows]
 
 
+def _bar_edges(downbeats: list[float], start: float, end: float) -> list[float]:
+    """Bar lines covering [start, end): the detected downbeats, continued at the typical bar length
+    where the grid stops short of the stretch (beat tracking often starts late or ends early)."""
+    if len(downbeats) < 2:
+        return []
+    length = float(sorted(b - a for a, b in zip(downbeats, downbeats[1:]))[(len(downbeats) - 1) // 2])
+    if length <= 0:
+        return []
+    inside = [d for d in downbeats if start - 0.25 * length <= d < end - 0.25 * length]
+    if not inside:          # stretch falls entirely before or after the detected grid
+        anchor = downbeats[0] if start < downbeats[0] else downbeats[-1]
+        k = (start - anchor) / length
+        inside = [anchor + round(k) * length] if anchor + round(k) * length < end else [anchor + (round(k) - 1) * length]
+    edges = list(inside)
+    while edges[0] > start + 0.1:                                # continue the grid backwards
+        edges.insert(0, edges[0] - length)                       # (a pickup bar is clipped at start)
+    later = [d for d in downbeats if d > edges[-1]]
+    while edges[-1] < end - 0.25 * length:                       # ... and forwards, closing the last bar
+        edges.append(later.pop(0) if later and later[0] - edges[-1] <= 1.5 * length else edges[-1] + length)
+        later = [d for d in later if d > edges[-1] + 0.5 * length]
+    # where the beat tracker lost the beat, fill the gap with evenly spaced bars
+    filled = [edges[0]]
+    for a, b in zip(edges, edges[1:]):
+        k = max(1, round((b - a) / length))
+        filled += [a + (b - a) * i / k for i in range(1, k + 1)]
+    return filled
+
+
+def _bar_rows(downbeats: list[float], start: float, end: float, segs: list[tuple], shape) -> list[str] | None:
+    """Instrumental stretch as bar lines: "| [Am] | % | [C] [G] | [F] |". None when there is no grid.
+    "%" repeats the previous bar, so it is only used after a bar holding that single chord."""
+    edges = _bar_edges(downbeats, start, end)
+    if not edges:
+        return None
+    cells, prev = [], None
+    for b0, b1 in zip(edges, edges[1:]):
+        lo = max(b0, start)
+        names = [shape(c) for c, s, e, _ in segs if s <= lo + 0.1 < e]
+        names += [shape(c) for c, s, *_ in segs if lo + 0.1 < s < min(b1, end) - 0.1]
+        names = [n for i, n in enumerate(names) if i == 0 or n != names[i - 1]]
+        if not names:
+            cells.append(None)
+        elif len(names) == 1 and names == prev:
+            cells.append(REPEAT_BAR)
+        else:
+            cells.append(" ".join(f"[{n}]" for n in names))
+        prev = names
+    while cells and cells[0] is None:       # silence before the first chord / after the last
+        cells.pop(0)
+    while cells and cells[-1] is None:
+        cells.pop()
+    if not cells:
+        return []
+    cells = [NO_CHORD if c is None else c for c in cells]
+    return ["| " + " | ".join(cells[i:i + BARS_PER_ROW]) + " |" for i in range(0, len(cells), BARS_PER_ROW)]
+
+
 def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", text.lower()).strip()
 
@@ -82,8 +143,13 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
         step = (end - start) / max(1, len(texts))
         timed = [(start + i * step, t) for i, t in enumerate(texts)]
 
+    downbeats = analysis.get("downbeats") or []
+    if analysis.get("meter"):
+        out.append(f"{{time: {time_signature(analysis['meter'])}}}")
+
     if not timed:
-        out += ["", "{c: Chords}"] + _chord_rows([shape(c) for c, *_ in segs])
+        rows = _bar_rows(downbeats, 0.0, duration, segs, shape)
+        out += ["", "{c: Chords}"] + (rows if rows is not None else _chord_rows([shape(c) for c, *_ in segs]))
         return "\n".join(out) + "\n"
 
     # 1. Split the timeline into sections: instrumental gaps and lyric blocks.
@@ -138,6 +204,11 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
 
     for b in blocks:
         if b["kind"] == "inst":
+            rows = _bar_rows(downbeats, b["start"], b["end"], segs, shape)
+            if rows is not None:
+                if rows:
+                    out += ["", f"{{c: {b['name']}}}"] + rows
+                continue
             names = []
             first = active_at(b["start"])
             if first is not None:
@@ -201,6 +272,42 @@ def replace_chord(text: str, index: int, new: str | None, expected: str | None =
 
 _DIRECTIVE = re.compile(r"^\{\s*([a-zA-Z_]+)\s*(?::\s*(.*?))?\s*\}$")
 _INLINE = re.compile(r"\[([^\]]+)\]")
+
+
+_BAR_MARKS = (REPEAT_BAR, NO_CHORD)
+
+
+def line_kind(parts: list[tuple]) -> str:
+    """CSS class for a parsed chart line: "bars" (| [Am] | % |), "chords-only", or "" (lyrics)."""
+    text = "".join(t for _, t in parts)
+    if "|" in text:
+        rest = text.replace("|", " ")
+        for mark in _BAR_MARKS:
+            rest = rest.replace(mark, " ")
+        if not rest.strip():
+            return "bars"
+    return "chords-only" if not text.strip() else ""
+
+
+def bar_cells(parts: list[tuple]) -> list[list[tuple[str, str]]]:
+    """A "bars" line split into bars; each bar is a list of ("chord", name) or ("mark", "%"/"N.C.").
+    A bar emptied in the editor stays as an empty bar, so the columns don't shift."""
+    cells: list[list[tuple[str, str]]] = [[]]
+    for chord, text in parts:
+        if chord:
+            cells[-1].append(("chord", chord))
+        for i, piece in enumerate(text.split("|")):
+            if i:
+                cells.append([])
+            if piece.strip() in _BAR_MARKS:
+                cells[-1].append(("mark", piece.strip()))
+    # the pieces before the first "|" and after the last one are not bars
+    lead = "".join(t for _, t in parts).lstrip()
+    if lead.startswith("|") and not cells[0]:
+        cells.pop(0)
+    if not cells[-1]:
+        cells.pop()
+    return cells
 
 
 def parse_chordpro(text: str) -> dict:

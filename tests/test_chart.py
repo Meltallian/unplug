@@ -130,3 +130,91 @@ def test_replace_chord_skips_empty_brackets_and_checks_expected():
     assert replace_chord(text, 1, "G", expected="C") == "[ ]la [Am]la [G]la\n"
     with pytest.raises(ValueError):
         replace_chord(text, 1, "G", expected="Am")
+
+
+BARS = {**ANALYSIS, "meter": 4, "downbeats": [float(t) for t in range(0, 40, 2)]}   # a bar every 2 s
+
+
+def test_instrumental_is_written_as_bars_with_repeat_signs():
+    from app.pipeline.chart import line_kind
+    # Am for two bars, then C and G sharing one bar, then F; lyrics start at 10 s
+    segs = [(AM, 0, 4, 8), (C, 4, 5, 2), (G, 5, 6, 2), (F, 6, 10, 8), (C, 10, 14, 8)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 10.0, "text": "First sung line"}]}
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics=lyrics, duration=14)
+    assert "| [Am] | % | [C] [G] | [F] |\n| % |" in text
+    assert "{time: 4/4}" in text
+    parsed = parse_chordpro(text)
+    assert parsed["meta"]["time"] == "4/4"
+    intro = parsed["sections"][0]
+    assert intro["name"] == "Intro" and [line_kind(l) for l in intro["lines"]] == ["bars", "bars"]
+    assert line_kind(parsed["sections"][1]["lines"][0]) == ""
+
+
+def test_no_lyrics_chart_is_bars():
+    segs = [(AM, 0, 4, 8), (F, 4, 8, 8)]
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics={"lines": []}, duration=8)
+    assert "| [Am] | % | [F] | % |" in text
+
+
+def test_line_kind():
+    from app.pipeline.chart import line_kind
+    assert line_kind([(None, "| "), ("Am", " | % |")]) == "bars"
+    assert line_kind([("Am", " "), ("F", "")]) == "chords-only"
+    assert line_kind([("Am", "Hello | world")]) == ""
+
+
+def test_bar_cells():
+    from app.pipeline.chart import bar_cells
+    line = parse_chordpro("{c: Intro}\n| [Am] | % | [C] [G] | [F] |\n")["sections"][0]["lines"][0]
+    assert bar_cells(line) == [[("chord", "Am")], [("mark", "%")], [("chord", "C"), ("chord", "G")], [("chord", "F")]]
+
+
+def test_bars_continue_where_the_beat_grid_stops_short():
+    # grid detected only from 4 s to 10 s; chords from 0 s to 20 s, no lyrics
+    analysis = {**ANALYSIS, "meter": 4, "downbeats": [4.0, 6.0, 8.0, 10.0]}
+    segs = [(AM, 0, 4, 8), (C, 4, 10, 12), (G, 10, 14, 8), (F, 14, 20, 12)]
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=segs, lyrics={"lines": []}, duration=20)
+    rows = [l for l in text.splitlines() if l.startswith("|")]
+    assert rows == ["| [Am] | % | [C] | % |", "| % | [G] | % | [F] |", "| % | % |"]
+
+
+def test_outro_before_the_first_downbeat_is_kept():
+    analysis = {**ANALYSIS, "meter": 4, "downbeats": [195.0, 197.0, 199.0]}
+    segs = [(C, 180, 189, 8), (AM, 189, 196, 8)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 185.0, "text": "last line"}]}
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=segs, lyrics=lyrics, duration=197)
+    assert "{c: Outro}" in text and "| [Am] |" in text
+
+
+def test_repeat_sign_only_after_a_single_chord_bar():
+    segs = [(C, 0, 2, 4), (C, 2, 3, 2), (G, 3, 6, 6), (F, 6, 8, 4)]
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics={"lines": []}, duration=8)
+    assert "| [C] | [C] [G] | [G] | [F] |" in text
+
+
+def test_silent_bar_inside_is_no_chord():
+    segs = [(C, 0, 2, 4), ("N", 2, 4, 4), (G, 4, 6, 4)]
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics={"lines": []}, duration=6)
+    assert "| [C] | N.C. | [G] |" in text
+
+
+def test_emptied_bar_keeps_its_column():
+    from app.pipeline.chart import bar_cells, line_kind
+    line = parse_chordpro("{c: Intro}\n| [Am] |  | [F] |\n")["sections"][0]["lines"][0]
+    assert line_kind(line) == "bars"
+    assert bar_cells(line) == [[("chord", "Am")], [], [("chord", "F")]]
+    assert line_kind(parse_chordpro("| [C] | N.C. | % |")["sections"][0]["lines"][0]) == "bars"
+
+
+def test_gap_in_the_beat_grid_is_filled_with_bars():
+    from app.pipeline.chart import _bar_edges
+    edges = _bar_edges([0.0, 2.0, 4.0, 12.0, 14.0], 0.0, 16.0)
+    assert edges == [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
+
+
+def test_chord_ringing_before_the_first_bar_line_is_kept():
+    analysis = {**ANALYSIS, "meter": 4, "downbeats": [10.6, 12.6, 14.6]}
+    segs = [(F, 5, 10.4, 8), (C, 10.4, 16, 8)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 0.5, "text": "a line"}, {"t": 1.0, "text": "end"}]}
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=segs, lyrics=lyrics, duration=16)
+    assert "| [F] [C] | [C] | % | % |" in text

@@ -22,6 +22,7 @@
   const chartCapo = parseInt(sheet.dataset.capo || "0", 10) || 0;
   const chartKey = sheet.dataset.key || "";
   const tempo = sheet.dataset.tempo || "";
+  const timeSig = sheet.dataset.time || "";
   const state = { capo: chartCapo, key: 0, size: store.get("unplug.size", 19), speed: store.get("unplug.speed", 22) };
 
   function pc(letter, acc) { return (PC[letter] + (acc === "#" ? 1 : acc === "b" ? -1 : 0) + 12) % 12; }
@@ -83,6 +84,7 @@
     if (key) { add("Key "); add(key, true); add(" · "); }
     if (state.capo) { add("Capo "); add(String(state.capo), true); } else add("No capo", true);
     if (tempo) add(` · ${tempo} bpm`);
+    if (timeSig) add(` · ${timeSig}`);
     if (state.key) add(` · transposed ${state.key > 0 ? "+" : ""}${state.key}`);
     document.getElementById("capo-label").textContent = "Capo " + state.capo;
     document.getElementById("key-label").textContent = state.key ? (state.key > 0 ? "+" : "") + state.key : "Key";

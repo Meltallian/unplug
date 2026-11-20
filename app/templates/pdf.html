@@ -25,7 +25,16 @@
   .bars .cell { border-left: 0.3mm solid #bbb; padding-left: 1.5mm; }
   .bars .cell:nth-child(4n), .bars .cell:last-child { border-right: 0.3mm solid #bbb; }
   .bars .ch { min-height: 0; padding-right: 1.2mm; }
-  .bars .rep { color: #999; }
+  .bars .rep, .ch.rep { color: #999; font-weight: normal; }
+  /* sung rows of bars: thin bar lines between the bars, a pickup before the first one */
+  .lbars { align-items: stretch; }
+  .lbars .cell { display: inline-flex; flex-wrap: wrap; align-items: flex-end; min-width: 3mm;
+    border-left: 0.2mm solid #999; padding: 0 1mm 0 0.9mm; margin-bottom: 0.6mm; }
+  .lbars .cell:last-child { border-right: 0.2mm solid #999; }
+  .lbars .cell.pickup { border-left: 0; padding-left: 0; }
+  .lbars .ch { padding-right: 0.8mm; }
+  .meter { display: inline-block; font-size: 8pt; color: #666; border: 0.2mm solid #ccc; border-radius: 1mm;
+    padding: 0 1.2mm; margin: 0.4mm 0 1mm; break-after: avoid; }
   .foot { margin-top: 4mm; font-size: 7.5pt; color: #999; }
 </style>
 </head>
@@ -35,17 +44,25 @@
   <div class="facts">{% if key %}Key <b>{{ key }}</b> · {% endif %}{% if capo %}Capo <b>{{ capo }}</b>{% else %}<b>No capo</b>{% endif %}{% if tempo %} · {{ tempo }} bpm{% endif %}{% if time %} · {{ time }}{% endif %}</div>
   <div class="diagrams">{% for name, svg in diagrams %}<div class="diagram">{{ svg | safe }}<div>{{ name }}</div></div>{% endfor %}</div>
   <div class="cols">
+  {% macro piece(kind, value, text) -%}
+  <span class="seg"><b class="ch{{ ' rep' if kind == 'mark' }}">{{ ("·" if value == "." else value) if kind else "" }}</b><span class="tx">{{ text if text.strip() else " " }}</span></span>
+  {%- endmacro %}
   {% for section in sections %}
     <section>
       {% if section.name %}<h2>[{{ section.name }}]</h2>{% endif %}
       {% for line in section.lines %}
+      {% if section.changes.get(loop.index0) %}<div><span class="meter">{{ section.changes[loop.index0].label }}</span></div>{% endif %}
       {% set kind = line | line_kind %}
       {% if kind == "bars" %}
-      <div class="line bars">{% for cell in line | bar_cells %}<span class="cell">{% for what, v in cell %}{% if what == "chord" %}<b class="ch">{{ v }}</b>{% else %}<span class="rep">{{ v }}</span>{% endif %}{% endfor %}</span>{% endfor %}</div>
+      <div class="line bars">{% for cell in line | bar_cells %}<span class="cell">{% for what, v in cell %}{% if what == "chord" %}<b class="ch">{{ v }}</b>{% else %}<span class="rep">{{ "·" if v == "." else v }}</span>{% endif %}{% endfor %}</span>{% endfor %}</div>
+      {% elif kind == "lyric-bars" %}
+      {% set pickup, cells = line | bar_row %}
+      <div class="line lbars">{% if pickup %}<span class="cell pickup">{% for what, v, text in pickup %}{{ piece(what, v, text) }}{% endfor %}</span>{% endif %}{% for cell in cells %}<span class="cell">{% for what, v, text in cell %}{{ piece(what, v, text) }}{% else %}{{ piece("", "", "") }}{% endfor %}</span>{% endfor %}</div>
       {% else %}
-      <div class="line {{ kind }}">{% for chord, text in line %}<span class="seg"><b class="ch">{{ chord or "" }}</b><span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
+      <div class="line {{ kind }}">{% for chord, text in line %}<span class="seg"><b class="ch">{{ chord or "" }}</b><span class="tx">{{ text if text else " " }}</span></span>{% endfor %}</div>
       {% endif %}
       {% endfor %}
+      {% if section.changes.get(section.lines | length) %}<div><span class="meter">{{ section.changes[section.lines | length].label }}</span></div>{% endif %}
     </section>
   {% endfor %}
   </div>

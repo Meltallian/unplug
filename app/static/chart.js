@@ -1,4 +1,5 @@
-// Chart view: capo / transpose, chord diagrams, font size, auto-scroll, screen wake lock.
+// Chart page: engraved score and lyrics views, capo / transpose, chord diagrams, font size,
+// auto-scroll, screen wake lock.
 (function () {
   "use strict";
   const NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
@@ -23,7 +24,11 @@
   const chartKey = sheet.dataset.key || "";
   const tempo = sheet.dataset.tempo || "";
   const timeSig = sheet.dataset.time || "";
-  const state = { capo: chartCapo, key: 0, size: store.get("unplug.size", 19), speed: store.get("unplug.speed", 22) };
+  const scoreEl = document.getElementById("score");
+  const lyricsEl = document.getElementById("lyrics");
+  const BASE_SIZE = 19;   // the text size at which the score is engraved at its normal size
+  const state = { capo: chartCapo, key: 0, size: store.get("unplug.size", BASE_SIZE), speed: store.get("unplug.speed", 22),
+                  view: store.get("unplug.view", "score") === "lyrics" ? "lyrics" : "score" };
 
   function pc(letter, acc) { return (PC[letter] + (acc === "#" ? 1 : acc === "b" ? -1 : 0) + 12) % 12; }
 
@@ -90,6 +95,72 @@
     document.getElementById("key-label").textContent = state.key ? (state.key > 0 ? "+" : "") + state.key : "Key";
     document.documentElement.style.setProperty("--chart-size", state.size + "px");
     document.getElementById("pdf-link").href = `/songs/${sheet.dataset.song}/pdf?capo=${state.capo}&key=${state.key}`;
+    const score = state.view === "score";
+    scoreEl.hidden = !score;
+    lyricsEl.hidden = score;
+    document.querySelectorAll("#views button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === state.view)));
+    if (score) loadScore();
+  }
+
+  // --- engraved score ------------------------------------------------------------------------
+  // The server engraves it (Verovio) for the width of this screen, the capo and the key shown.
+  // A+ / A- zoom it: the same screen is laid out as if it were narrower or wider.
+  let scoreShown = "", scoreTimer = 0, scoreRequest = 0;
+  function scoreWidth() {
+    const zoom = state.size / BASE_SIZE;
+    return Math.max(280, Math.min(1600, Math.round(scoreEl.clientWidth / zoom / 20) * 20));
+  }
+  function scoreMessage(text) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = text;
+    scoreEl.replaceChildren(p);
+  }
+  function loadScore(again) {
+    const query = `width=${scoreWidth()}&capo=${state.capo}&key=${state.key}`;
+    if (query === scoreShown && !again) return;
+    scoreShown = query;
+    clearTimeout(scoreTimer);
+    scoreTimer = setTimeout(async () => {     // several taps on capo / key / size: one request
+      const mine = ++scoreRequest;
+      scoreEl.classList.add("loading");
+      if (!scoreEl.childElementCount) scoreMessage("Engraving the score…");
+      let html = null, message = "Couldn't engrave the score.";
+      try {
+        const r = await fetch(`/songs/${sheet.dataset.song}/score?${query}`);
+        if (r.ok) html = await r.text();
+        else try { message = (await r.json()).detail || message; } catch (e) { /* not JSON */ }
+      } catch (e) { /* offline */ }
+      if (mine !== scoreRequest) return;      // a newer request is on its way
+      scoreEl.classList.remove("loading");
+      if (html === null) { scoreShown = ""; scoreMessage(message + " The Lyrics view still works."); return; }
+      scoreEl.innerHTML = html;               // trusted: built by our server, text escaped by the engraver
+    }, again ? 0 : 150);
+  }
+  window.addEventListener("resize", () => { if (state.view === "score") loadScore(); });
+  document.getElementById("views").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-view]");
+    if (!b) return;
+    state.view = b.dataset.view;
+    store.set("unplug.view", state.view);
+    render();
+  });
+
+  // A chord symbol of the score is the chord mark with the same number in the lyrics view
+  // (both are numbered like the server counts them). Small targets: accept a tap close to one.
+  function scoreChord(e) {
+    if (!scoreEl.contains(e.target)) return null;
+    let best = null, bestDist = 14;
+    scoreEl.querySelectorAll('g.harm[id^="chord-"]').forEach((g) => {
+      const r = g.getBoundingClientRect();
+      const dx = Math.max(r.left - e.clientX, 0, e.clientX - r.right);
+      const dy = Math.max(r.top - e.clientY, 0, e.clientY - r.bottom);
+      if (Math.max(dx, dy) < bestDist) { best = g; bestDist = Math.max(dx, dy); }
+    });
+    if (!best) return null;
+    const ch = lyricsEl.querySelector(`.ch[data-i="${best.id.slice(6)}"]`);
+    if (ch) { best.classList.add("editing"); }
+    return ch;
   }
 
   // --- auto-scroll ---------------------------------------------------------------------------
@@ -116,7 +187,7 @@
   sheet.addEventListener("click", (e) => {
     if (e.target.closest("a, button, form, textarea")) return;
     if (scrolling) { setScrolling(false); return; }   // while scrolling, a tap only pauses
-    const ch = e.target.closest(".ch[data-i]");
+    const ch = e.target.closest(".ch[data-i]") || scoreChord(e);
     if (ch) openPicker(ch);
   });
 
@@ -166,6 +237,7 @@
   function closePicker() {
     picker.hidden = true;
     if (editing) editing.classList.remove("editing");
+    scoreEl.querySelectorAll("g.harm.editing").forEach((g) => g.classList.remove("editing"));
     editing = null;
   }
 
@@ -192,6 +264,7 @@
     }
     closePicker();
     render();
+    if (state.view === "score") loadScore(true);   // the chart changed: engrave it again
   }
 
   picker.addEventListener("click", (e) => {

@@ -6,8 +6,13 @@ body.chart-page { padding-bottom: 72px; overflow-anchor: none; }
 .titles { flex: 1; min-width: 0; }
 .song-title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .edit { color: var(--accent); text-decoration: none; font-weight: 600; margin-left: 10px; }
-.facts { font-size: .9rem; margin: 4px 0; }
+.facts-row { display: flex; align-items: center; gap: 10px; }
+.facts { flex: 1; min-width: 0; font-size: .9rem; margin: 4px 0; }
 .facts b { font-weight: 700; }
+/* Score | Lyrics */
+.views { flex: 0 0 auto; display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.views button { background: transparent; color: var(--muted); border: 0; border-radius: 0; padding: 5px 11px; font-size: .8rem; }
+.views button[aria-pressed="true"] { background: var(--accent); color: #fff; }
 .diagrams { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 2px; transition: max-height .2s ease, opacity .2s ease;
   max-height: 140px; scrollbar-width: none; }
 .chart-head.collapsed .diagrams { max-height: 0; opacity: 0; padding: 0; overflow: hidden; }
@@ -34,8 +39,30 @@ body.chart-page { padding-bottom: 72px; overflow-anchor: none; }
 .line.bars .cell { border-left: 2px solid var(--line); padding: 0 .3em 0 .45em; }
 .line.bars .cell:nth-child(4n), .line.bars .cell:last-child { border-right: 2px solid var(--line); }
 .line.bars .ch { min-height: 0; padding-right: .3em; }
-.line.bars .rep { color: var(--muted); }
+.line.bars .rep, .ch.rep { color: var(--muted); font-weight: 400; }
+/* sung rows of bars: | Em7 Today is gonna be the | G day that they're gonna | with thin bar lines */
+.line.lbars { align-items: stretch; row-gap: .3em; }
+.line.lbars .cell { display: inline-flex; flex-wrap: wrap; align-items: flex-end; max-width: 100%; min-width: 1.5em;
+  border-left: 1px solid var(--muted); padding: 0 .4em 0 .35em; }
+.line.lbars .cell:last-child { border-right: 1px solid var(--muted); }
+.line.lbars .cell.pickup { border-left: 0; padding-left: 0; }
+.line.lbars .ch { padding-right: .3em; }
+/* where the meter changes: 6/8 · ♩. = 50 */
+.meter { display: inline-block; font-size: .75em; color: var(--muted); border: 1px solid var(--line); border-radius: 6px;
+  padding: 0 .5em; margin: .2em 0 .35em; }
 .tx { line-height: 1.3; }
+
+/* engraved score (Verovio SVG): the theme's colours, text in a Times like the engraver measured */
+@font-face { font-family: "Leipzig"; src: url("/score-font.woff2") format("woff2"); font-display: block; }
+.score { margin: 4px -10px 0; transition: opacity .15s ease; }
+.score.loading { opacity: .45; }
+.score-page > svg { display: block; width: 100%; height: auto; }
+.score svg.definition-scale { color: var(--fg); fill: var(--fg);
+  font-family: "Times New Roman", Times, "Liberation Serif", "Nimbus Roman", Tinos, serif; }
+.score g.harm[id^="chord-"] { cursor: pointer; }
+.score g.harm.editing { fill: var(--accent); }
+.score-note { margin: 0 10px 6px; }
+.score p.muted { margin: 12px 10px; }
 .note { font-size: .85rem; color: var(--muted); }
 .small { font-size: .8rem; }
 form.inline { display: inline; }

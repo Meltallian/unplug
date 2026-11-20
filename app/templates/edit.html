@@ -2,7 +2,9 @@
 {% block title %}Edit · {{ song.title }}{% endblock %}
 {% block content %}
 <h1 style="font-size:1.2rem;margin:0 0 8px">Edit chart</h1>
-<p class="muted">Chords go in square brackets just before the syllable: <code>[Am]Is it so [C]perfect now</code>.
+<p class="muted">Chords go in square brackets just before the syllable, bars between bar lines:
+<code>| [Am]Is it so | [C]perfect now |</code>. Words before the first <code>|</code> are sung at the end of the bar before.
+In a bar, <code>.</code> is a beat on which the chord keeps ringing (<code>| [C] . . [G] |</code>), <code>%</code> repeats the bar before.
 Section names: <code>{c: Chorus}</code>. Your edits are saved as your own copy; others keep their version.</p>
 <form method="post" action="/songs/{{ song.id }}/edit">
   <textarea name="chordpro" class="editor" spellcheck="false" autocapitalize="off" autocomplete="off">{{ text }}</textarea>

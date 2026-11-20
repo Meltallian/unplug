@@ -204,3 +204,17 @@ def test_emptied_bar_keeps_its_column():
     assert line_kind(line) == "bars"
     assert bar_cells(line) == [[("chord", "Am")], [], [("chord", "F")]]
     assert line_kind(parse_chordpro("| [C] | N.C. | % |")["sections"][0]["lines"][0]) == "bars"
+
+
+def test_gap_in_the_beat_grid_is_filled_with_bars():
+    from app.pipeline.chart import _bar_edges
+    edges = _bar_edges([0.0, 2.0, 4.0, 12.0, 14.0], 0.0, 16.0)
+    assert edges == [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
+
+
+def test_chord_ringing_before_the_first_bar_line_is_kept():
+    analysis = {**ANALYSIS, "meter": 4, "downbeats": [10.6, 12.6, 14.6]}
+    segs = [(F, 5, 10.4, 8), (C, 10.4, 16, 8)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 0.5, "text": "a line"}, {"t": 1.0, "text": "end"}]}
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=segs, lyrics=lyrics, duration=16)
+    assert "| [F] [C] | [C] | % | % |" in text

@@ -73,14 +73,18 @@ def _bar_edges(downbeats: list[float], start: float, end: float) -> list[float]:
         k = (start - anchor) / length
         inside = [anchor + round(k) * length] if anchor + round(k) * length < end else [anchor + (round(k) - 1) * length]
     edges = list(inside)
-    while edges[0] - length >= start - 0.25 * length:            # continue the grid backwards
-        edges.insert(0, edges[0] - length)
+    while edges[0] > start + 0.1:                                # continue the grid backwards
+        edges.insert(0, edges[0] - length)                       # (a pickup bar is clipped at start)
     later = [d for d in downbeats if d > edges[-1]]
-    while True:                                                  # ... and forwards, closing the last bar
-        nxt = later.pop(0) if later else edges[-1] + length
-        edges.append(nxt)
-        if nxt >= end - 0.25 * length:
-            return edges
+    while edges[-1] < end - 0.25 * length:                       # ... and forwards, closing the last bar
+        edges.append(later.pop(0) if later and later[0] - edges[-1] <= 1.5 * length else edges[-1] + length)
+        later = [d for d in later if d > edges[-1] + 0.5 * length]
+    # where the beat tracker lost the beat, fill the gap with evenly spaced bars
+    filled = [edges[0]]
+    for a, b in zip(edges, edges[1:]):
+        k = max(1, round((b - a) / length))
+        filled += [a + (b - a) * i / k for i in range(1, k + 1)]
+    return filled
 
 
 def _bar_rows(downbeats: list[float], start: float, end: float, segs: list[tuple], shape) -> list[str] | None:

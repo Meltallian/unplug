@@ -50,3 +50,17 @@ def test_chord_change_snaps_to_the_bar_line():
     names = [(s["name"], s["start"], s["on_bar"]) for s in result["segments"]]
     assert names == [("C", 0.0, True), ("Am", 4.0, True)]
     assert result["downbeats"] == [0.0, 4.0, 8.0] and result["meter"] == 4
+
+
+def test_random_downbeats_stay_four_four():
+    rng = np.random.default_rng(1)
+    beats = _beats(400)
+    for _ in range(20):
+        downs = np.sort(rng.choice(beats, 40, replace=False))
+        assert fit_grid(beats, downs)[0] == 4
+
+
+def test_six_eight_is_detected():
+    beats = _beats(120, 0.3)
+    meter, pos = fit_grid(beats, beats[::6])
+    assert meter == 6 and list(pos[:7]) == [0, 1, 2, 3, 4, 5, 0]

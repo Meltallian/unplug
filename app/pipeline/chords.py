@@ -18,14 +18,14 @@ import numpy as np
 from app.pipeline import rhythm
 from app.music import ALL_CHORDS, chord_name, choose_capo, diatonic, estimate_key, key_name, triad_pcs
 
-FEATURES_VERSION = "f3"
+FEATURES_VERSION = "f4"
 HOP = 512
 
 
 @dataclass(frozen=True)
 class Params:
     change_bar: float = 0.3         # HMM: chance the chord changes on the "1" of a bar
-    change_half: float = 0.05       # ... on the middle beat of a 4/4 bar
+    change_half: float = 0.05       # ... in the middle of a 4/4 or 6/8 bar
     change_off: float = 0.001       # ... on any other beat
     out_of_key_prior: float = 0.25  # relative prior weight for chords outside the detected key
     sharpness: float = 12.0         # softmax temperature on template similarity
@@ -36,7 +36,7 @@ class Params:
 
 
 PARAMS = Params()
-VERSION = "bars-1"
+VERSION = "bars-2"
 
 
 def _templates(p: Params) -> np.ndarray:
@@ -110,8 +110,8 @@ def _change_prob(pos: np.ndarray, meter: int, p: Params) -> np.ndarray:
     """Chance of a chord change on each beat, from its position in the bar."""
     c = np.full(len(pos), p.change_off)
     c[pos <= 0] = p.change_bar                       # the "1" (and the stretch before the first beat)
-    if meter == 4:
-        c[pos == 2] = p.change_half
+    if meter % 2 == 0:
+        c[pos == meter // 2] = p.change_half
     return c
 
 

@@ -9,13 +9,15 @@ import re
 from collections import Counter
 
 from app.music import chord_name, transpose
+from app.pipeline.rhythm import time_signature
 
 MIN_BEATS = 2            # chords shorter than this are merged into the previous one on the chart
 MAX_LINE = 8.0           # a lyric line "owns" at most this many seconds after its start
 INSTRUMENTAL_GAP = 6.0   # a gap this long without lyrics becomes its own section
 CHORDS_PER_ROW = 4
 BARS_PER_ROW = 4
-REPEAT_BAR = "%"         # a bar that just keeps the previous chord
+REPEAT_BAR = "%"         # repeat the previous bar (only written after a single-chord bar)
+NO_CHORD = "N.C."        # a silent bar inside a stretch of bars
 
 
 def _clean_segments(segments: list[tuple]) -> list[tuple]:
@@ -57,29 +59,56 @@ def _chord_rows(names: list[str]) -> list[str]:
     return ["  ".join(f"[{n}]" for n in row) for row in rows]
 
 
+def _bar_edges(downbeats: list[float], start: float, end: float) -> list[float]:
+    """Bar lines covering [start, end): the detected downbeats, continued at the typical bar length
+    where the grid stops short of the stretch (beat tracking often starts late or ends early)."""
+    if len(downbeats) < 2:
+        return []
+    length = float(sorted(b - a for a, b in zip(downbeats, downbeats[1:]))[(len(downbeats) - 1) // 2])
+    if length <= 0:
+        return []
+    inside = [d for d in downbeats if start - 0.25 * length <= d < end - 0.25 * length]
+    if not inside:          # stretch falls entirely before or after the detected grid
+        anchor = downbeats[0] if start < downbeats[0] else downbeats[-1]
+        k = (start - anchor) / length
+        inside = [anchor + round(k) * length] if anchor + round(k) * length < end else [anchor + (round(k) - 1) * length]
+    edges = list(inside)
+    while edges[0] - length >= start - 0.25 * length:            # continue the grid backwards
+        edges.insert(0, edges[0] - length)
+    later = [d for d in downbeats if d > edges[-1]]
+    while True:                                                  # ... and forwards, closing the last bar
+        nxt = later.pop(0) if later else edges[-1] + length
+        edges.append(nxt)
+        if nxt >= end - 0.25 * length:
+            return edges
+
+
 def _bar_rows(downbeats: list[float], start: float, end: float, segs: list[tuple], shape) -> list[str] | None:
-    """Instrumental stretch as bar lines: "| [Am] | % | [C] [G] | [F] |". None when there is no grid."""
-    bars = [d for d in downbeats if start - 0.25 <= d < end - 0.5]
-    if not bars:
+    """Instrumental stretch as bar lines: "| [Am] | % | [C] [G] | [F] |". None when there is no grid.
+    "%" repeats the previous bar, so it is only used after a bar holding that single chord."""
+    edges = _bar_edges(downbeats, start, end)
+    if not edges:
         return None
-    edges = bars + [min(end, bars[-1] + (bars[-1] - bars[-2] if len(bars) > 1 else 2.0))]
-    cells, last = [], None
+    cells, prev = [], None
     for b0, b1 in zip(edges, edges[1:]):
-        names = [shape(c) for c, s, e, _ in segs if s <= b0 + 0.1 < e]
-        names += [shape(c) for c, s, *_ in segs if b0 + 0.1 < s < b1 - 0.1]
+        lo = max(b0, start)
+        names = [shape(c) for c, s, e, _ in segs if s <= lo + 0.1 < e]
+        names += [shape(c) for c, s, *_ in segs if lo + 0.1 < s < min(b1, end) - 0.1]
         names = [n for i, n in enumerate(names) if i == 0 or n != names[i - 1]]
         if not names:
             cells.append(None)
-            continue
-        cells.append(REPEAT_BAR if names == [last] else " ".join(f"[{n}]" for n in names))
-        last = names[-1]
-    while cells and cells[0] is None:       # silence before the first chord
+        elif len(names) == 1 and names == prev:
+            cells.append(REPEAT_BAR)
+        else:
+            cells.append(" ".join(f"[{n}]" for n in names))
+        prev = names
+    while cells and cells[0] is None:       # silence before the first chord / after the last
         cells.pop(0)
     while cells and cells[-1] is None:
         cells.pop()
     if not cells:
         return []
-    cells = [c or REPEAT_BAR for c in cells]
+    cells = [NO_CHORD if c is None else c for c in cells]
     return ["| " + " | ".join(cells[i:i + BARS_PER_ROW]) + " |" for i in range(0, len(cells), BARS_PER_ROW)]
 
 
@@ -112,7 +141,7 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
 
     downbeats = analysis.get("downbeats") or []
     if analysis.get("meter"):
-        out.append(f"{{time: {analysis['meter']}/4}}")
+        out.append(f"{{time: {time_signature(analysis['meter'])}}}")
 
     if not timed:
         rows = _bar_rows(downbeats, 0.0, duration, segs, shape)
@@ -241,16 +270,24 @@ _DIRECTIVE = re.compile(r"^\{\s*([a-zA-Z_]+)\s*(?::\s*(.*?))?\s*\}$")
 _INLINE = re.compile(r"\[([^\]]+)\]")
 
 
+_BAR_MARKS = (REPEAT_BAR, NO_CHORD)
+
+
 def line_kind(parts: list[tuple]) -> str:
     """CSS class for a parsed chart line: "bars" (| [Am] | % |), "chords-only", or "" (lyrics)."""
     text = "".join(t for _, t in parts)
-    if "|" in text and not text.replace("|", "").replace(REPEAT_BAR, "").strip():
-        return "bars"
+    if "|" in text:
+        rest = text.replace("|", " ")
+        for mark in _BAR_MARKS:
+            rest = rest.replace(mark, " ")
+        if not rest.strip():
+            return "bars"
     return "chords-only" if not text.strip() else ""
 
 
 def bar_cells(parts: list[tuple]) -> list[list[tuple[str, str]]]:
-    """A "bars" line split into bars; each bar is a list of ("chord", name) / ("repeat", "%")."""
+    """A "bars" line split into bars; each bar is a list of ("chord", name) or ("mark", "%"/"N.C.").
+    A bar emptied in the editor stays as an empty bar, so the columns don't shift."""
     cells: list[list[tuple[str, str]]] = [[]]
     for chord, text in parts:
         if chord:
@@ -258,9 +295,15 @@ def bar_cells(parts: list[tuple]) -> list[list[tuple[str, str]]]:
         for i, piece in enumerate(text.split("|")):
             if i:
                 cells.append([])
-            if piece.strip() == REPEAT_BAR:
-                cells[-1].append(("repeat", REPEAT_BAR))
-    return [c for c in cells if c]
+            if piece.strip() in _BAR_MARKS:
+                cells[-1].append(("mark", piece.strip()))
+    # the pieces before the first "|" and after the last one are not bars
+    lead = "".join(t for _, t in parts).lstrip()
+    if lead.startswith("|") and not cells[0]:
+        cells.pop(0)
+    if not cells[-1]:
+        cells.pop()
+    return cells
 
 
 def parse_chordpro(text: str) -> dict:

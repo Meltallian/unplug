@@ -166,4 +166,41 @@ def test_line_kind():
 def test_bar_cells():
     from app.pipeline.chart import bar_cells
     line = parse_chordpro("{c: Intro}\n| [Am] | % | [C] [G] | [F] |\n")["sections"][0]["lines"][0]
-    assert bar_cells(line) == [[("chord", "Am")], [("repeat", "%")], [("chord", "C"), ("chord", "G")], [("chord", "F")]]
+    assert bar_cells(line) == [[("chord", "Am")], [("mark", "%")], [("chord", "C"), ("chord", "G")], [("chord", "F")]]
+
+
+def test_bars_continue_where_the_beat_grid_stops_short():
+    # grid detected only from 4 s to 10 s; chords from 0 s to 20 s, no lyrics
+    analysis = {**ANALYSIS, "meter": 4, "downbeats": [4.0, 6.0, 8.0, 10.0]}
+    segs = [(AM, 0, 4, 8), (C, 4, 10, 12), (G, 10, 14, 8), (F, 14, 20, 12)]
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=segs, lyrics={"lines": []}, duration=20)
+    rows = [l for l in text.splitlines() if l.startswith("|")]
+    assert rows == ["| [Am] | % | [C] | % |", "| % | [G] | % | [F] |", "| % | % |"]
+
+
+def test_outro_before_the_first_downbeat_is_kept():
+    analysis = {**ANALYSIS, "meter": 4, "downbeats": [195.0, 197.0, 199.0]}
+    segs = [(C, 180, 189, 8), (AM, 189, 196, 8)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 185.0, "text": "last line"}]}
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=segs, lyrics=lyrics, duration=197)
+    assert "{c: Outro}" in text and "| [Am] |" in text
+
+
+def test_repeat_sign_only_after_a_single_chord_bar():
+    segs = [(C, 0, 2, 4), (C, 2, 3, 2), (G, 3, 6, 6), (F, 6, 8, 4)]
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics={"lines": []}, duration=8)
+    assert "| [C] | [C] [G] | [G] | [F] |" in text
+
+
+def test_silent_bar_inside_is_no_chord():
+    segs = [(C, 0, 2, 4), ("N", 2, 4, 4), (G, 4, 6, 4)]
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics={"lines": []}, duration=6)
+    assert "| [C] | N.C. | [G] |" in text
+
+
+def test_emptied_bar_keeps_its_column():
+    from app.pipeline.chart import bar_cells, line_kind
+    line = parse_chordpro("{c: Intro}\n| [Am] |  | [F] |\n")["sections"][0]["lines"][0]
+    assert line_kind(line) == "bars"
+    assert bar_cells(line) == [[("chord", "Am")], [], [("chord", "F")]]
+    assert line_kind(parse_chordpro("| [C] | N.C. | % |")["sections"][0]["lines"][0]) == "bars"

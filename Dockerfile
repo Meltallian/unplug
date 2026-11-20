@@ -14,9 +14,8 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     PYTHONUNBUFFERED=1
 
 # beat_this model weights (beats + downbeats), baked in so workers never download at run time
-ADD --checksum=sha256:8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331 \
+ADD --chmod=755 --checksum=sha256:8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331 \
     https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt /opt/models/beat_this-final0.ckpt
-RUN chmod 644 /opt/models/beat_this-final0.ckpt
 ENV BEAT_THIS_CHECKPOINT=/opt/models/beat_this-final0.ckpt
 
 WORKDIR /srv

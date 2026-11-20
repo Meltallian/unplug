@@ -3,7 +3,8 @@
 beat_this (CPJKU, 2024) gives beat and downbeat times. Its raw downbeats are noisy (1-, 2- and
 3-beat "bars" appear), so fit_grid() lays a regular grid over the beats: every beat gets a
 position in its bar (0 = the "1"), bars are `meter` beats long, and a bar may be cut short only
-at a cost. The meter is 4 unless 3 fits the downbeats clearly better.
+at a cost. The meter is 4 unless 3 or 6 fits the downbeats clearly better (6 = a 6/8 song whose
+beats the model counts in eighth notes).
 """
 
 import os
@@ -15,6 +16,11 @@ CHECKPOINT = os.environ.get("BEAT_THIS_CHECKPOINT", "final0")
 DOWNBEAT_TOL = 0.07   # s: a beat counts as a detected downbeat if one is this close
 SHORT_BAR_COST = 3.0  # cost of cutting a bar short (a missed beat, an odd bar)
 MIN_GAP = 0.08        # s: beats closer than this are duplicates
+METERS = (4, 3, 6)    # 4 first: the default
+# Another meter must fit the downbeats better than it contradicts them (score > 0: random
+# downbeats never reach that, at most -0.12 per beat in 300 trials) and beat 4/4 by this much
+# per beat (random downbeats give up to ~0.05 in favour of 3).
+METER_MARGIN = 0.05
 
 
 @lru_cache(maxsize=1)
@@ -62,7 +68,7 @@ def _fit(near: np.ndarray, meter: int) -> tuple[float, np.ndarray]:
 
 
 def fit_grid(beats: np.ndarray, downbeats: np.ndarray) -> tuple[int, np.ndarray]:
-    """(meter, position of every beat in its bar). Meter is 4 or 3."""
+    """(meter, position of every beat in its bar). Meter is 4, 3 or 6."""
     if len(beats) == 0:
         return 4, np.zeros(0, dtype=int)
     if len(downbeats):
@@ -72,9 +78,17 @@ def fit_grid(beats: np.ndarray, downbeats: np.ndarray) -> tuple[int, np.ndarray]
         near = np.minimum(np.abs(beats - lo), np.abs(beats - hi)) < DOWNBEAT_TOL
     else:
         near = np.zeros(len(beats), dtype=bool)
-    s4, p4 = _fit(near, 4)
-    s3, p3 = _fit(near, 3)
-    return (3, p3) if s3 > s4 else (4, p4)
+    fits = {m: _fit(near, m) for m in METERS}
+    best = 4
+    for m in METERS[1:]:
+        score = fits[m][0]
+        if score > 0 and score > fits[best][0] and score > fits[4][0] + max(2.0, METER_MARGIN * len(beats)):
+            best = m
+    return best, fits[best][1]
+
+
+def time_signature(meter: int) -> str:
+    return {3: "3/4", 6: "6/8"}.get(meter, "4/4")
 
 
 def tempo(beats: np.ndarray) -> float:

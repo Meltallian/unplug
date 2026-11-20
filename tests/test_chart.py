@@ -536,3 +536,17 @@ def test_words_go_in_the_bar_where_they_were_heard():
                            lyrics={"lines": [{**line, "w": [0.2, 0.6, 1.0, 4.1]}]}, duration=8.0)
     assert "| [C]one two three | | [G]four |" in heard
     assert by_position != heard
+
+
+def test_the_part_that_comes_back_most_is_the_chorus_a_repeated_verse_stays_a_verse():
+    from app.pipeline.chart import build_chordpro
+    verse = ["Today is gonna be the day", "By now you should have somehow"]
+    chorus = ["Because maybe", "You are gonna be the one that saves me"]
+    other = ["Backbeat the word is on the street", "I am sure you have heard it all before"]
+    texts = verse + other + chorus + verse + chorus + chorus
+    lines = [{"t": 2.0 + 4.0 * i, "text": text} for i, text in enumerate(texts)]
+    analysis = {"capo": 0, "key": {"name": "C"}, "tempo": 120.0}
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=[((0, "maj"), 0.0, 50.0, 100)],
+                          lyrics={"lines": lines}, duration=50.0)
+    names = [ln[4:-1] for ln in text.splitlines() if ln.startswith("{c: ")]
+    assert names == ["Verse 1", "Verse 2", "Chorus", "Verse 3", "Chorus", "Chorus"]

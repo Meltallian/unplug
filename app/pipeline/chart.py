@@ -402,12 +402,14 @@ def _alike(a: str, b: str) -> bool:
 def _split_by_repetition(blocks: list[dict]) -> list[dict]:
     """Cut lyric blocks where the song goes from lines sung once to lines that come back, or the
     other way: synced lyrics often arrive as one long block, and the part that comes back is the
-    chorus. Each lyric block gets "repeats": True/False. A chorus sung twice in a row is cut where
-    its first line comes round again."""
+    chorus. Each lyric block gets "repeats": True/False. Parts that follow each other without a
+    line sung once in between (a chorus twice, a verse sung again after a chorus) are cut where
+    the first line of a part comes round again."""
     texts = [_norm(line[2]) for b in blocks if b["kind"] == "lyrics" for line in b["lines"]]
     comes_back = [any(_alike(a, b) for j, b in enumerate(texts) if j != i) for i, a in enumerate(texts)]
     out: list[dict] = []
     seen = 0
+    openers: list[str] = []                          # first lines of the parts that come back
     for block in blocks:
         if block["kind"] != "lyrics":
             out.append(block)
@@ -432,10 +434,12 @@ def _split_by_repetition(blocks: list[dict]) -> list[dict]:
                 merged.append(run)
         for run in merged:
             repeats = sum(flags[i] for i in run) * 2 > len(run)
-            parts, first = [[]], norm[run[0]]
+            parts = [[]]
+            if repeats:
+                openers.append(norm[run[0]])
             for i in run:
-                if repeats and len(parts[-1]) >= MIN_REFRAIN and _alike(norm[i], first):
-                    parts.append([])                 # the first line again: the chorus starts over
+                if repeats and len(parts[-1]) >= MIN_REFRAIN and any(_alike(norm[i], o) for o in openers):
+                    parts.append([])                 # a first line again: that part starts over
                 parts[-1].append(i)
             for part in parts:
                 out.append({"kind": "lyrics", "lines": [block["lines"][i] for i in part], "repeats": repeats})
@@ -508,6 +512,25 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
         candidate, count = max(keys.items(), key=lambda kv: (kv[1], len(kv[0])))
         if count >= 2:
             chorus_key = candidate
+    # Among the parts whose lines come back, the one that comes back most often is the chorus
+    # (a first verse sung again at the end is still a verse). Two parts are the same part if
+    # half the lines of the shorter one are in the other ("Because maybe ..." / "I said maybe ...").
+    def same_part(x: dict, y: dict) -> bool:
+        short, long = sorted((x, y), key=lambda b: len(b["lines"]))
+        theirs = [_norm(line[2]) for line in long["lines"]]
+        shared = sum(any(_alike(_norm(line[2]), t) for t in theirs) for line in short["lines"])
+        return shared * 2 >= len(short["lines"])
+
+    families: list[list[dict]] = []
+    for b in lyric_blocks:
+        if b.get("repeats"):
+            family = next((f for f in families if any(same_part(b, other) for other in f)), None)
+            if family is None:
+                families.append(family := [])
+            family.append(b)
+    families = [f for f in families if len(f) >= 2]
+    most = max(map(len, families), default=0)
+    refrain = [id(b) for b in next((f for f in reversed(families) if len(f) == most), [])]   # a tie: the later part
     verse = 0
     inst_seen = 0
     n_inst = sum(b["kind"] == "inst" for b in blocks)
@@ -517,7 +540,7 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
             b["name"] = "Intro" if b is blocks[0] else ("Outro" if b is blocks[-1] else "Interlude")
             if n_inst == 1 and b is not blocks[0] and b is not blocks[-1]:
                 b["name"] = "Interlude"
-        elif b.get("repeats") and len(b["lines"]) >= MIN_REFRAIN or _norm(" ".join(line[2] for line in b["lines"])) == chorus_key:
+        elif id(b) in refrain or (not refrain and _norm(" ".join(line[2] for line in b["lines"])) == chorus_key):
             b["name"] = "Chorus"
         else:
             verse += 1

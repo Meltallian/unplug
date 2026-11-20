@@ -147,7 +147,7 @@ def test_instrumental_is_written_as_bars_with_repeat_signs():
     assert parsed["meta"]["time"] == "4/4"
     intro = parsed["sections"][0]
     assert intro["name"] == "Intro" and [line_kind(l) for l in intro["lines"]] == ["bars", "bars"]
-    assert line_kind(parsed["sections"][1]["lines"][0]) == ""
+    assert line_kind(parsed["sections"][1]["lines"][0]) == "lyric-bars"     # sung lines are rows of bars too
 
 
 def test_no_lyrics_chart_is_bars():
@@ -160,7 +160,8 @@ def test_line_kind():
     from app.pipeline.chart import line_kind
     assert line_kind([(None, "| "), ("Am", " | % |")]) == "bars"
     assert line_kind([("Am", " "), ("F", "")]) == "chords-only"
-    assert line_kind([("Am", "Hello | world")]) == ""
+    assert line_kind([("Am", "Hello | world")]) == "lyric-bars"     # any line with "|" is a row of bars
+    assert line_kind([("Am", "Hello world")]) == ""
 
 
 def test_bar_cells():
@@ -217,4 +218,276 @@ def test_chord_ringing_before_the_first_bar_line_is_kept():
     segs = [(F, 5, 10.4, 8), (C, 10.4, 16, 8)]
     lyrics = {"offset": 0.0, "lines": [{"t": 0.5, "text": "a line"}, {"t": 1.0, "text": "end"}]}
     text = build_chordpro(title="T", artist="", analysis=analysis, segments=segs, lyrics=lyrics, duration=16)
-    assert "| [F] [C] | [C] | % | % |" in text
+    # C starts on the last beat of the bar F rings in: dots keep it there ("[F] [C]" would read as beat 3)
+    assert "| [F] . . [C] | [C] | % | % |" in text
+
+
+# --- bars everywhere (SCORE_SPEC section 2) -----------------------------------------------------
+
+def _rows(text):
+    return [l for l in text.splitlines() if "|" in l]
+
+
+def test_sung_lines_are_rows_of_bars():
+    # a bar every 2 s; Am 0-4, C 4-8, F 8-12, G 12-18. The first line owns 8 s (4-12): "aa" at 4 s,
+    # "bb" at 8.8 s; the second starts at 14 s and owns 4 s: "cc" at 14, "dd" at 15.5, "ee" at 17.
+    segs = [(AM, 0, 4, 8), (C, 4, 8, 8), (F, 8, 12, 8), (G, 12, 18, 12)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 4.0, "text": "aa bb"}, {"t": 14.0, "text": "cc dd ee"}]}
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics=lyrics, duration=18)
+    assert text.split("\n\n", 1)[1] == (
+        "{c: Intro}\n"
+        "| [Am] | % |\n"
+        "\n"
+        "{c: Verse 1}\n"
+        "| [C]aa | | [F]bb | | [G] |\n"     # a chord only where it changes; bars without words stay in the row
+        "| cc dd | ee |\n")
+
+
+def test_line_starting_late_in_a_bar_is_a_pickup():
+    segs = [(AM, 0, 4, 8), (C, 4, 12, 16)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 3.5, "text": "And so it goes on"}]}     # 0.5 s before the bar line
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics=lyrics, duration=12)
+    assert _rows(text) == ["| [Am] | % |", "And | [C]so | it | goes | on |"]
+    # ... but not when there is no bar before it to sing the pickup in
+    lyrics = {"offset": 0.0, "lines": [{"t": 1.5, "text": "And so it goes on"}]}
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=[(C, 2, 12, 16)], lyrics=lyrics, duration=12)
+    assert _rows(text) == ["| And | [C]so | it | goes | on |", "| [C] |"]       # the last bar is the outro
+
+
+def test_line_starting_in_a_bar_still_sung_is_a_pickup():
+    segs = [(C, 0, 12, 24)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 0.0, "text": "one two three"}, {"t": 4.5, "text": "four five six seven"},
+                                       {"t": 5.0, "text": "yeah"}, {"t": 5.5, "text": "eight nine"}]}
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics=lyrics, duration=12)
+    rows = _rows(text)
+    assert rows[0] == "| [C]one two | three |"
+    assert rows[1] == "| four five six seven |"       # 0.5 s for four words: all in the bar they start in
+    assert rows[2] == "yeah |"                         # sung in that same bar: a pickup with no bar of its own
+    assert rows[3] == "eight | | nine | |"             # "eight" too; "nine" comes two bars later
+
+
+def test_chord_off_its_default_beat_is_written_with_dots():
+    # bars of 2 s in 4/4: G comes in on beat 4 of the first bar, F on beat 2 of the third
+    segs = [(C, 0, 1.5, 3), (G, 1.5, 4.5, 6), (F, 4.5, 8, 7)]
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics={"lines": []}, duration=8)
+    assert "| [C] . . [G] | [G] | [G] [F] . . | [F] |" in text
+    # three beats in a bar: the default place of a second chord is beat 3, so beat 2 needs a dot
+    waltz = {**ANALYSIS, "meter": 3, "downbeats": [0.0, 3.0, 6.0, 9.0]}
+    segs = [(C, 0, 1, 1), (G, 1, 5, 4), (F, 5, 9, 4)]
+    text = build_chordpro(title="T", artist="", analysis=waltz, segments=segs, lyrics={"lines": []}, duration=9)
+    assert "{time: 3/4}" in text and "| [C] [G] . | [G] [F] | [F] |" in text
+
+
+def test_words_follow_the_chord_they_are_sung_on():
+    segs = [(C, 0, 3.5, 7), (G, 3.5, 8, 9)]          # G on beat 4 of the second bar
+    lyrics = {"offset": 0.0, "lines": [{"t": 2.0, "text": "aa bb cc dd"}]}       # words at 2, 3.6, 5.3 and 6.9 s
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics=lyrics, duration=8)
+    assert _rows(text) == ["| [C]aa . . [G]bb | cc | dd |"]
+
+
+def test_silence_under_sung_bars_is_no_chord():
+    segs = [(C, 0, 2, 4), ("N", 2, 6, 8), (G, 6, 10, 8)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 0.0, "text": "la la la la la"}]}
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics=lyrics, duration=10)
+    assert _rows(text) == ["| [C]la la | N.C. la | la | [G]la |", "| [G] |"]       # the second row is the outro
+
+
+def test_words_that_look_like_marks_are_made_harmless():
+    segs = [(C, 0, 8, 16)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 0.0, "text": "100 % sure | or . not N.C."}]}
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics=lyrics, duration=8)
+    words = " ".join(_rows(text)).replace("[C]", "").split()
+    assert [w for w in words if w != "|"] == ["100", "(%)", "sure", "/", "or", "not", "(N.C.)"]
+
+
+def test_plain_lyrics_keep_chords_over_lines():
+    # no timing: the words cannot be put in bars, so the lines stay as before (and the intro stays bars)
+    segs = [(AM, 0, 8, 16), (C, 8, 16, 16)]
+    lyrics = {"lines": [{"t": None, "text": "first line"}, {"t": None, "text": "second line"}]}
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics=lyrics, duration=16)
+    assert "[Am]first line\n[C]second line" in text
+
+
+def test_meter_change_between_sections():
+    # chorus in 6/8 (bars of 3 s), verse in 4/4 (bars of 2 s) from 6 s, chorus again from 14 s
+    analysis = {**ANALYSIS, "tempo": 50.0, "meter": 6, "downbeats": [0.0, 3.0, 6.0, 8.0, 10.0, 12.0, 14.0, 17.0],
+                "meters": [{"start": 0.0, "meter": 6, "tempo": 50.0}, {"start": 6.0, "meter": 4, "tempo": 75.0},
+                           {"start": 14.0, "meter": 6, "tempo": 50.0}]}
+    segs = [(AM, 0, 6, 12), (C, 6, 9, 6), (G, 9, 14, 10), (F, 14, 20, 12)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 6.0, "text": "one two three four"}, {"t": 13.5, "text": "back again now"}]}
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=segs, lyrics=lyrics, duration=20)
+    assert text.split("\n\n", 1)[1] == (
+        "{c: Intro}\n"
+        "| [Am] | % |\n"
+        "\n"
+        "{c: Verse 1}\n"
+        "{time: 4/4}\n"
+        "{tempo: 75}\n"
+        "| [C]one two | [C] [G]three | four | |\n"
+        "back |\n"                     # the pickup is sung in the last 4/4 bar
+        "{time: 6/8}\n"
+        "{tempo: 50}\n"
+        "| [F]again | now |\n")
+    parsed = parse_chordpro(text)
+    assert parsed["meta"]["time"] == "6/8" and parsed["meta"]["tempo"] == "50"       # the header: how the song starts
+    verse = parsed["sections"][1]
+    assert verse["changes"] == {0: {"time": "4/4", "tempo": "75", "label": "4/4 · ♩ = 75"},
+                                2: {"time": "6/8", "tempo": "50", "label": "6/8 · ♩. = 50"}}
+
+
+def test_meter_change_inside_an_instrumental_row():
+    analysis = {**ANALYSIS, "tempo": 120.0, "meter": 4, "downbeats": [0.0, 2.0, 4.0, 6.0, 9.0, 12.0],
+                "meters": [{"start": 0.0, "meter": 4, "tempo": 120.0}, {"start": 6.0, "meter": 6, "tempo": 40.0}]}
+    segs = [(AM, 0, 6, 12), (C, 6, 15, 18)]
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=segs, lyrics={"lines": []}, duration=15)
+    assert text.endswith("{c: Chords}\n| [Am] | % | % |\n{time: 6/8}\n{tempo: 40}\n| [C] | % | % |\n")
+
+
+def test_replace_chord_counts_the_marks_of_bar_rows():
+    from app.pipeline.chart import replace_chord
+    text = "{c: Verse}\n{time: 3/4}\nBy now | [Em7]should've | [G] . [D]gotta | % |\n| N.C. | [A7sus4] |\n"
+    assert replace_chord(text, 2, "Dsus4", expected="D").splitlines()[2] == "By now | [Em7]should've | [G] . [Dsus4]gotta | % |"
+    assert replace_chord(text, 3, None, expected="A7sus4").splitlines()[3] == "| N.C. |  |"
+
+
+def test_meter_of():
+    from app.pipeline.chart import meter_of
+    assert meter_of("4/4") == (4, 4, 4) and meter_of("3/4") == (3, 4, 3) and meter_of(" 2/4 ") == (2, 4, 2)
+    assert meter_of("6/8") == (6, 8, 2) and meter_of("12/8") == (12, 8, 4) and meter_of("9/8") == (9, 8, 3)
+    assert meter_of(None) == (4, 4, 4) and meter_of("waltz") == (4, 4, 4) and meter_of("0/4") == (4, 4, 4)
+
+
+def test_bar_row_splits_a_sung_row():
+    from app.pipeline.chart import bar_row, line_kind
+    line = parse_chordpro("By now you | [Em7]should've somehow | [C] . . [D]do | N.C. hush | | % |\n")["sections"][0]["lines"][0]
+    pickup, bars = bar_row(line)
+    assert line_kind(line) == "lyric-bars"
+    assert pickup == [("", None, "By now you ")]
+    assert bars == [[("chord", "Em7", "should've somehow ")],
+                    [("chord", "C", " "), ("mark", ".", " "), ("mark", ".", " "), ("chord", "D", "do ")],
+                    [("mark", "N.C.", " hush ")], [], [("mark", "%", " ")]]
+    # dots do not make an instrumental row a sung one
+    dots = parse_chordpro("| [C] . . [D] | % |\n")["sections"][0]["lines"][0]
+    assert line_kind(dots) == "bars"
+    from app.pipeline.chart import bar_cells
+    assert bar_cells(dots) == [[("chord", "C"), ("mark", "."), ("mark", "."), ("chord", "D")], [("mark", "%")]]
+
+
+def test_later_time_and_tempo_do_not_overwrite_the_header():
+    p = parse_chordpro("{title: T}\n{tempo: 50}\n{time: 6/8}\n{c: A}\n| [C] |\n{c: B}\n{tempo: 75}\n{time: 4/4}\n| [G] |\n"
+                       "{tempo: 80}\n| [D] |\n{time: 3/2}\n")
+    assert p["meta"] == {"title": "T", "tempo": "50", "time": "6/8"}
+    assert p["sections"][0]["changes"] == {}
+    assert p["sections"][1]["changes"] == {0: {"time": "4/4", "tempo": "75", "label": "4/4 · ♩ = 75"},
+                                           1: {"time": None, "tempo": "80", "label": "♩ = 80"},
+                                           2: {"time": "3/2", "tempo": None, "label": "3/2"}}
+    # a chart whose first section gives the tempo (hand-written): still the header
+    p = parse_chordpro("{c: Verse}\n{tempo: 120}\n[C]hello\n")
+    assert p["meta"] == {"tempo": "120"} and p["sections"][0]["changes"] == {}
+
+
+# --- reading a chart as a score -------------------------------------------------------------------
+
+def _beats(bar):
+    """A bar as text: one item per beat, "Chord:words"."""
+    return ["+".join(name for name, _ in beat["chords"]) + (":" + " ".join(beat["words"]) if beat["words"] else "")
+            for beat in bar["beats"]]
+
+
+def _bars(text):
+    from app.pipeline.chart import read_score
+    return [_beats(bar) for section in read_score(text)["sections"] for bar in section["bars"]]
+
+
+def test_score_places_chords_on_beats():
+    # one chord: the whole bar; two: the second on beat 3; as many chords and dots as beats: one per beat
+    assert _bars("| [C] | [C] [G] | [C] . . [G] | [C] [D] [Em] | [C] [D] [Em] [F] | |\n") == [
+        ["C", "", "", ""], ["C", "", "G", ""], ["C", "", "", "G"], ["C", "D", "Em", ""], ["C", "D", "Em", "F"], ["", "", "", ""]]
+    assert _bars("{time: 3/4}\n| [C] [G] | [C] [G] . | [C] |\n") == [["C", "", "G"], ["C", "G", ""], ["C", "", ""]]
+    assert _bars("{time: 6/8}\n| [C] [G] | [C] | [C] [D] [Em] |\n") == [["C", "G"], ["C", ""], ["C+D", "Em"]]
+    assert _bars("{time: 12/8}\n| [C] [G] |\n") == [["C", "", "G", ""]]
+    # dots that do not add up to the bar are not beats
+    assert _bars("| [C] . [G] |\n") == [["C", "", "G", ""]]
+
+
+def test_score_repeat_and_no_chord():
+    from app.pipeline.chart import read_score
+    score = read_score("| [C] [G] | % | N.C. | [N.C.] |\n")
+    bars = score["sections"][0]["bars"]
+    assert [_beats(b) for b in bars] == [["C", "", "G", ""], ["C", "", "G", ""], ["N.C.", "", "", ""], ["N.C.", "", "", ""]]
+    # only real chord marks are numbered, like replace_chord counts them ("[N.C.]" is a mark, "N.C." is not)
+    assert [c for b in bars for beat in b["beats"] for c in beat["chords"]] == [
+        ("C", 0), ("G", 1), ("C", None), ("G", None), ("N.C.", None), ("N.C.", 2)]
+
+
+def test_score_spreads_words_over_the_beats_of_their_chord():
+    assert _bars("| [Em7]Today is gonna be the | [G]day [D]that they're | so [C]what |\n") == [
+        ["Em7:Today is", ":gonna", ":be", ":the"],              # five words on the four beats of Em7
+        ["G:day", "", "D:that", ":they're"],                    # one word on G's two beats, two on D's
+        ["C:so", "", ":what", ""]]                              # words before the first chord share its beats
+    assert _bars("| [C]one . . [D]two |\n") == [["C:one", "", "", "D:two"]]
+    assert _bars("| just words here |\n") == [[":just", ":words", ":here", ""]]
+
+
+def test_score_pickup_is_sung_at_the_end_of_the_bar_before():
+    text = ("{c: Intro}\n| [G] | [D] |\n{c: Verse}\nBy now you | [Em]should've |\n"
+            "And | [C]so on and on |\nYeah yeah |\n")
+    assert _bars(text) == [["G", "", "", ""],
+                           ["D", "", ":By now", ":you"],                     # the last bar of the section above
+                           ["Em:should've", "", "", ":And"],
+                           ["C:so on", ":and on", ":Yeah", ":yeah"]]         # the bar's own words make room for the pickup
+    # no bar before it: on the "1" of the first bar
+    assert _bars("Hey | [C]you |\n") == [["C:Hey you", "", "", ""]]
+    assert _bars("Hey |\n") == [[":Hey", "", "", ""]]
+
+
+def test_score_numbers_chords_like_replace_chord():
+    from app.pipeline.chart import read_score, replace_chord
+    text = "{title: [X]}\n{c: Verse}\nBy [D]now | [Em7]should've [ ] | [G] . . [C]do | % |\n[Am]old [F]line\n"
+    score = read_score(text)
+    marks = sorted((i, name) for s in score["sections"] for b in s["bars"] for beat in b["beats"]
+                   for name, i in beat["chords"] if i is not None)
+    assert marks == [(0, "D"), (1, "Em7"), (2, "G"), (3, "C"), (4, "Am"), (5, "F")]
+    for i, name in marks:
+        assert f"[{name}x]" in replace_chord(text, i, name + "x", expected=name)
+
+
+def test_score_of_a_chart_without_bars_is_one_bar_per_chord():
+    from app.pipeline.chart import read_score
+    score = read_score("{c: Verse}\nIs it [Am]so perfect [C]now\nno chords here\n[F]  [G]\n")
+    bars = score["sections"][0]["bars"]
+    assert [_beats(b) for b in bars] == [[":Is", "", ":it", ""], ["Am:so", "", ":perfect", ""], ["C:now", "", "", ""],
+                                         [":no", ":chords", ":here", ""], ["F", "", "", ""], ["G", "", "", ""]]
+    assert all(b["guess"] for b in bars) and score["unbarred"] == 6
+    assert read_score("| [C] |\n")["unbarred"] == 0
+    assert read_score("{title: T}\n")["sections"] == []
+
+
+def test_score_word_cut_by_a_chord_is_hyphenated():
+    assert _bars("| Yester[C]day [G]all |\n") == [["C:Yesterday", "", "G:all", ""]]
+    assert _bars("| [Am]Yester[C]day |\n") == [["Am:Yester-", "", "C:day", ""]]
+
+
+def test_score_follows_meter_changes():
+    from app.pipeline.chart import read_score
+    text = ("{time: 6/8}\n{tempo: 50}\n{c: Chorus}\n| [D]me get out | [C] |\n{c: Verse}\n{time: 4/4}\n{tempo: 75}\n"
+            "| [C]It's hard to take | % |\nHelp |\n{time: 6/8}\n{tempo: 50}\n| [D]me |\n")
+    score = read_score(text)
+    assert (score["time"], score["beats"], score["tempo"]) == ((6, 8), 2, "50")
+    bars = [b for s in score["sections"] for b in s["bars"]]
+    assert [(b["time"], b["tempo"], len(b["beats"])) for b in bars] == [
+        ((6, 8), "50", 2), ((6, 8), "50", 2), ((4, 4), "75", 4), ((4, 4), "75", 4), ((6, 8), "50", 2)]
+    assert _beats(bars[3]) == ["C", "", "", ":Help"]         # the pickup belongs to the last 4/4 bar; % repeats C
+
+
+def test_built_chart_reads_back_bar_for_bar():
+    from app.pipeline.chart import read_score
+    segs = [(AM, 0, 4, 8), (C, 4, 8, 8), (F, 8, 12, 8), (G, 12, 16, 8)]
+    lyrics = {"offset": 0.0, "lines": [{"t": 3.5, "text": "one two three four five"}, {"t": 10.0, "text": "six seven"}]}
+    text = build_chordpro(title="T", artist="", analysis=BARS, segments=segs, lyrics=lyrics, duration=16)
+    score = read_score(text)
+    assert [s["name"] for s in score["sections"]] == ["Intro", "Verse 1"]
+    bars = [b for s in score["sections"] for b in s["bars"]]
+    assert len(bars) == 8 and score["unbarred"] == 0          # 16 s of 2 s bars, none lost or doubled
+    assert _beats(bars[1]) == ["Am", "", "", ":one"]          # "%" repeats Am; the pickup on the last beat
+    assert _beats(bars[2])[0] == "C:two"

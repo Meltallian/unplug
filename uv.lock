@@ -638,6 +638,20 @@ wheels = [
 ]
 
 [[package]]
+name = "mir-eval"
+version = "0.8.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "decorator" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/28/db/3bf39fc9ab0fb757f297f9a0da7207e823688291f9e61bb67b44fa17bc2f/mir_eval-0.8.2.tar.gz", hash = "sha256:141a3e1193276889fc32e911547e73dcb3e829ee8cfea60f7bbcd633c0792569", size = 117649 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1b/5a/69ce896a32ebc8c75deae00b1fba9837567405fa6ef37b377f2e85b856ae/mir_eval-0.8.2-py3-none-any.whl", hash = "sha256:114cda33d8e17408c170598e0b36ed0d71ff4a2fee8eaf9e165b58ecf1c87170", size = 102794 },
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1359,12 +1373,14 @@ dependencies = [
     { name = "torch" },
     { name = "torchaudio" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "verovio" },
     { name = "weasyprint" },
     { name = "yt-dlp", extra = ["default"] },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "mir-eval" },
     { name = "pytest" },
 ]
 
@@ -1387,12 +1403,16 @@ requires-dist = [
     { name = "torch", specifier = ">=2.5", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torchaudio", specifier = ">=2.5", index = "https://download.pytorch.org/whl/cpu" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+    { name = "verovio", specifier = ">=6.4,<7" },
     { name = "weasyprint", specifier = ">=63.0" },
     { name = "yt-dlp", extras = ["default"], specifier = ">=2026.10.26" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.3" }]
+dev = [
+    { name = "mir-eval", specifier = ">=0.8" },
+    { name = "pytest", specifier = ">=8.3" },
+]
 
 [[package]]
 name = "urllib3"
@@ -1438,6 +1458,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/51/27/c1d2f9fa977f8f42ea294604166df10e0027e6dc6cd17f85ede386c9bf36/uvloop-0.23.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:090865d8ce7a03986755a3ce711b7dd0d4b44eb14ab74368b717f3fad1180208", size = 4532597 },
     { url = "https://files.pythonhosted.org/packages/42/dd/2cb6a2c8a30ca55c07a882dd4ae4ceae0fa7d8c15b25b3b7cb9a4b6cf4ca/uvloop-0.23.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:bd6f2f81c7b9da99d301c0b16b82044e76fe887086e42e1590ecf520b94dbdac", size = 4230048 },
     { url = "https://files.pythonhosted.org/packages/f4/52/29989cbaa4022dc4ef35c1dd60a4ab989e4c2065f341ed483ae71d2bd950/uvloop-0.23.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:a6ac96da66c35bf789bdcde78a88dc7d56b7907d8379648c54adc1c61594575d", size = 4394152 },
+]
+
+[[package]]
+name = "verovio"
+version = "6.4.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/17/9e/e10d52df1fdd5f075f22ebed3ec687696e21247cdf9331cdae552ab70d75/verovio-6.4.1.tar.gz", hash = "sha256:101f8a984ce9edf27fb876075a12555cae4387776809daf84094fdba16a6a65e", size = 6238088 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f4/dd/4a5f771772cafc05f899a5d8bdded89075d0b35d152d70b4f15a5a62fcd8/verovio-6.4.1-cp310-abi3-macosx_13_0_arm64.whl", hash = "sha256:d24cc20f7d24bfaeea75f6977ec8ebf11435db61a1d06f4d3765c642c0b7f4de", size = 7419449 },
+    { url = "https://files.pythonhosted.org/packages/48/09/55ce8797027f234fd9e040189fd45507d96b66c5a51c086915b8d2ca1f58/verovio-6.4.1-cp310-abi3-macosx_13_0_x86_64.whl", hash = "sha256:c3a2a70758ff472da85278558c2c2bf38a22db957f61c5418aea14255d4293f7", size = 7700085 },
+    { url = "https://files.pythonhosted.org/packages/ff/a1/f1286d09050e659111c0f524da5543bd05fb2b8adf51dc08f9f2508e84d6/verovio-6.4.1-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:544cce948eef0b288079a343ad56a50b8707ad90b3969fb868524ee0bcf722eb", size = 8215444 },
+    { url = "https://files.pythonhosted.org/packages/03/22/c98513dfe1d31681080ea742d8a9a8e7dc83e68d9528b35913298687824e/verovio-6.4.1-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:c19311ec28b113e179b547792b608b901509bbd065615d85bf38b2ad31146e12", size = 8614166 },
+    { url = "https://files.pythonhosted.org/packages/86/6a/d7091634068bf57a9d35d7ffc561fbba2166a44c3b219e36e4bcd4359696/verovio-6.4.1-cp310-abi3-win32.whl", hash = "sha256:033eab9ec7a04539cd85a3267f03d4841747de27a42cbd1c0e2bb7145dbfd731", size = 5467033 },
+    { url = "https://files.pythonhosted.org/packages/b9/f0/7fb3b1b26ca40b9354b9260ebf6bec0f49aa506b5d07fb8b6cd5dd3e4e6a/verovio-6.4.1-cp310-abi3-win_amd64.whl", hash = "sha256:01f283a1327c93e8b00daab74bed5eadc234343e67eb050155dceb7751d0ce8c", size = 5862882 },
 ]
 
 [[package]]

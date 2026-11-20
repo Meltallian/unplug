@@ -176,3 +176,13 @@ def test_key_is_the_scale_that_holds_the_chords_not_the_chord_played_most():
     assert key_of_song([((9, "min"), 50), ((0, "maj"), 20), ((7, "maj"), 20), ((5, "maj"), 10)]) == (9, "minor")
     assert key_of_song([((0, "maj"), 50), ((9, "min7"), 20), ((7, "7"), 20), ((5, "maj"), 10)]) == (0, "major")
     assert key_of_song([]) == (0, "major")
+
+
+def test_page_and_pdf_draw_the_same_chord_shapes():
+    import re
+    from pathlib import Path
+    from app.music import SHAPES
+    js = (Path(__file__).parent.parent / "app" / "static" / "chart.js").read_text()
+    block = js[js.index("const SHAPES = {"):]
+    block = block[:block.index("};")]
+    assert dict(re.findall(r'"([^"]+)": "([x0-9]{6})"', block)) == SHAPES

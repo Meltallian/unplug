@@ -10,6 +10,13 @@
     "F#": "244322", "G": "320003", "Ab": "466544", "A": "x02220", "Bb": "x13331", "B": "x24442",
     "Cm": "x35543", "C#m": "x46654", "Dm": "xx0231", "Ebm": "x68876", "Em": "022000", "Fm": "133111",
     "F#m": "244222", "Gm": "355333", "Abm": "466444", "Am": "x02210", "Bbm": "x13321", "Bm": "x24432",
+    // richer chords with a common open (or easy) shape of their own (same table as app/music.py)
+    "A7": "x02020", "B7": "x21202", "C7": "x32310", "D7": "xx0212", "E7": "020100", "G7": "320001",
+    "F#7": "242322", "Am7": "x02010", "Bm7": "x20202", "Dm7": "xx0211", "Em7": "022030", "F#m7": "242222",
+    "C#m7": "x46454", "Cmaj7": "x32000", "Dmaj7": "xx0222", "Emaj7": "021100", "Fmaj7": "xx3210",
+    "Gmaj7": "320002", "Amaj7": "x02120", "Asus4": "x02230", "Dsus4": "xx0233", "Esus4": "022200",
+    "Gsus4": "330013", "Csus4": "x33011", "Asus2": "x02200", "Dsus2": "xx0230", "Esus2": "024400",
+    "Csus2": "x30013", "Gsus2": "300033", "Fsus2": "xx3011", "Bm7b5": "x2323x", "F#m7b5": "2x221x",
   };
   const CHORD = /^([A-G])([#b]?)(.*?)(?:\/([A-G])([#b]?))?$/;
 
@@ -40,11 +47,15 @@
     return root + m[3] + bass;
   }
 
+  // The diagram to show for a written chord: its own if we have one (Em7, Dsus4 ...), else the
+  // plain major or minor chord of its root.
   function shapeKey(name) {
     const m = CHORD.exec(name.trim());
     if (!m) return null;
+    const root = NAMES[pc(m[1], m[2])];
+    if (SHAPES[root + m[3]]) return root + m[3];
     const minor = /^(m(?!aj)|min|-)/.test(m[3]);
-    return NAMES[pc(m[1], m[2])] + (minor ? "m" : "");
+    return root + (minor ? "m" : "");
   }
 
   function diagram(name) {

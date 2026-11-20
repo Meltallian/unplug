@@ -164,6 +164,10 @@ class _Meters:
         """Beats in the bar that starts at t."""
         return self._at(t)[2]
 
+    def changes_at(self, t: float) -> bool:
+        """True when the bar that starts at t is the first one of a new meter or tempo."""
+        return any(abs(start - t) <= 0.05 for start in self.starts)
+
     def lines(self, t: float) -> list[str]:
         """The directive lines to write before a bar that starts at t (none while nothing changes)."""
         _, time, _, tempo = self._at(t)
@@ -209,10 +213,13 @@ def _marks(chords: list[tuple], beats: int) -> list[str]:
 
 def _cells(edges: list[float], bars: list[list[tuple]], meters: _Meters) -> list[tuple[float, str | None]]:
     """Bars without lyrics as (bar start, cell): "[Am]", "%", "[C] [G]"; None for a silent bar.
-    "%" repeats the previous bar, so it is only used after a bar holding that single chord."""
+    "%" repeats the previous bar, so it is only used after a bar holding that single chord, and
+    never across a change of meter (the chord is written again there)."""
     cells, prev = [], None
     for t, chords in zip(edges, bars):
         names = [name for _, name, _ in chords]
+        if meters.changes_at(t):
+            prev = None
         if not names:
             cells.append((t, None))
         elif len(names) == 1 and names == prev:
@@ -357,9 +364,9 @@ def _sung_sections(blocks: list[dict], edges: list[float], segs: list[tuple], sh
         for plan in b["plans"]:
             row = " ".join(plan["pickup"] + ["|"])
             for j in range(plan["row"], plan["stop"]):
-                if change := meters.lines(edges[j]):      # the meter changes here: close the row first
-                    out += [row] * (row != "|") + change
-                    row = "|"
+                if change := meters.lines(edges[j]):      # the meter changes here: close the row first,
+                    out += [row] * (row != "|") + change  # and say again which chord is ringing
+                    row, fresh = "|", True
                 chords = bars[j]
                 if not chords:
                     marks = [(NO_CHORD, float("-inf"))] if ringing is not None else []

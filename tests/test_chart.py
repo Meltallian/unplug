@@ -341,6 +341,9 @@ def test_meter_change_inside_an_instrumental_row():
     segs = [(AM, 0, 6, 12), (C, 6, 15, 18)]
     text = build_chordpro(title="T", artist="", analysis=analysis, segments=segs, lyrics={"lines": []}, duration=15)
     assert text.endswith("{c: Chords}\n| [Am] | % | % |\n{time: 6/8}\n{tempo: 40}\n| [C] | % | % |\n")
+    # the chord that keeps ringing is written again where the meter changes
+    text = build_chordpro(title="T", artist="", analysis=analysis, segments=[(AM, 0, 15, 30)], lyrics={"lines": []}, duration=15)
+    assert text.endswith("| [Am] | % | % |\n{time: 6/8}\n{tempo: 40}\n| [Am] | % | % |\n")
 
 
 def test_replace_chord_counts_the_marks_of_bar_rows():

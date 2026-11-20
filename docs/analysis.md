@@ -2,7 +2,7 @@
 
 What happens between "audio downloaded" and "chart text written", what each part relies on, and
 the numbers behind the choices. Code: `app/pipeline/` (`rhythm.py`, `btc.py`, `chords.py`,
-`lyrics.py`), benchmark: `app/eval/bench.py`.
+`lyrics.py`, `words.py`), benchmark: `app/eval/bench.py`.
 
 ## The stages
 
@@ -29,10 +29,16 @@ the numbers behind the choices. Code: `app/pipeline/` (`rhythm.py`, `btc.py`, `c
    written richer (7, m7, maj7, sus4, sus2, dim ...) only where the model gives that reading at
    least half of the chord's weight, each chord gets one spelling per song (Am7 or Am, not both),
    and in 6/8 nothing shorter than a counted beat survives.
-4. **Lyrics** (`lyrics.py`): synced lyrics from LRCLIB; the shift between the lyrics' recording
-   and the video is found from vocal-band activity, among the shifts that keep every sung line on
-   music (where chords were found). Without that last condition a video outro pulled the lyrics of
-   one song 23 s late.
+4. **Lyrics and words** (`lyrics.py`, `words.py`): synced lyrics from LRCLIB give one time per line,
+   on the recording they were timed on. Whisper ("tiny") is given the words and says when it hears
+   each one; a line is "heard" if that starts within 1 s of the line's time and the words are
+   likely. If at least 35 % of the lines are heard where their times say, the times are kept.
+   Otherwise the lines are placed again: by matching the lyrics' own recording (the album track,
+   found on YouTube by its exact length) to the video by its chords, window by window, when the
+   lengths differ; else by looking for each line in a transcript of the song; vocal-band activity
+   is the last resort. Every word then has its own time, and the chart puts a word in the bar
+   where it is heard, so a chord sits over the word sung when it changes. Lines the model does not
+   hear get their words from the syllables at the pace of the song.
 
 The analysis result (`cache/chords.json`): `tempo`, `meter` (3 = 3/4, 4 = 4/4, 6 = 6/8, both at the
 start of the song), `meters` (every change: start, meter, tempo), `downbeats` (all bar starts),
@@ -70,6 +76,28 @@ same songs, same alignment per song:
 
 What the columns mean is at the top of `app/eval/bench.py`.
 
+### Words
+
+Measured on 24 songs of JamendoLyrics MultiLang (12 English, 12 French, no hip-hop; free-licence
+recordings with the start of every word annotated by hand), given each line's text and start time
+as LRCLIB would give them. Error on the start of each word, first words of lines left out:
+
+| words placed | median error | within 0.3 s | within 1 s |
+|---|---|---|---|
+| by position in the text until the next line (`main`) | 0.42 s | 39 % | 78 % |
+| by syllables at the pace of the song (fallback) | 0.31 s | 49 % | 89 % |
+| heard by Whisper tiny, fallback for lines not heard | 0.09 s | 79 % | 94 % |
+
+Whisper "base" gives the same (0.09 s, 80 %, 95 %) for twice the time, so "tiny" is used. French
+does as well as English (83 % and 74 % within 0.3 s). This set is not in the repository's
+benchmark command; the script that produced the table is not kept in the tree.
+
+Two cases found on the way, both now handled: the official video of the owner's test song adds
+8.9 s before the song and 4.5 s more before the last chorus (found by the reference recording);
+the LRCLIB entry of "Wonderwall" for its official video claims the video's length but is timed
+24 s early at the start and 8 s early at the end (found by ear: the first line is at 38.1 s, as
+it is sung).
+
 ## What the numbers do not say
 
 - *Tempo level.* On a few songs the tracker counts twice as fast or as slowly as the annotators
@@ -83,5 +111,7 @@ What the columns mean is at the top of `app/eval/bench.py`.
 - *Records a quarter tone off.* The nearest semitone is a toss-up; the benchmark then compares at
   the better of the two (`shift`), the chart shows the one the model chose.
 - *Vocabulary.* No slash chords, no add9; sixths are written as plain chords.
-- *Lyric timing* is per line (from LRCLIB) with one shift per song; a video that inserts a scene
-  in the middle of the song still gets its later lines late.
+- *Screamed or buried vocals.* Whisper hears less there; lines it does not hear keep the syllable
+  guess, and if no reference recording is found either, the line times are LRCLIB's.
+- *Time and memory.* The lyrics stage takes 20 to 35 s and up to 1.2 GB, on top of the 30 s of the
+  analysis.

@@ -21,7 +21,7 @@ from pathlib import Path
 
 from app.config import get_settings
 from app.eval.sheet import parse_sheet
-from app.music import Chord, chord_name, diatonic, key_from_chords, key_name, same_scale, transpose
+from app.music import Chord, chord_name, diatonic, key_from_chords, key_name, plain, same_scale, transpose
 from app.pipeline.audio import decode
 from app.pipeline.chart import _clean_segments
 from app.pipeline.chords import VERSION, analyze, load_segments, with_overrides
@@ -55,7 +55,8 @@ def score_song(fixture: Path, songs_dir: Path, params=None) -> dict:
     if not (song_dir / "meta.json").exists():
         return {"song": src["song"], "error": "audio not downloaded"}
     result = analyze(decode(song_dir), song_dir / "cache" / "chords.json", params)
-    raw = load_segments(result)
+    # the sheets only tell major from minor, so richer chords (G7, Am7, Dsus4) count as their plain chord
+    raw = [(c if c == "N" else plain(c), s, e, b) for c, s, e, b in load_segments(result)]
     # Score what the chart shows: very short chords are merged away there, so they are here too.
     shown = _clean_segments(raw)
     covered = [(s, e) for _, s, e, _ in shown]

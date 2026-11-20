@@ -36,7 +36,7 @@ torch = [{ index = "pytorch-cpu" }]
 torchaudio = [{ index = "pytorch-cpu" }]
 
 [dependency-groups]
-dev = ["pytest>=8.3"]
+dev = ["pytest>=8.3", "mir_eval>=0.8"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

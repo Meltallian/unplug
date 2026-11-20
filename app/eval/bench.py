@@ -1,8 +1,12 @@
-"""`python -m app.eval.bench`: score the analysis against public, time-aligned annotations.
+"""Score the analysis against public, time-aligned annotations.
 
-Reference: the McGill Billboard annotations (chords with times, bars, metre, tonic; CC0). They sit
-in DATA_DIR/ref/billboard (see `fetch` below); the audio comes from YouTube like any other song,
-matched by duration, and is never part of the repository.
+  python -m app.eval.bench fetch [N] [odd]   get the annotations and N songs (default 40); with
+                                             "odd", only songs not in 4/4 (written to map-odd.json)
+  python -m app.eval.bench [map|map-odd] [param=value ...]   score (and save the run)
+
+Reference: the McGill Billboard annotations (chords with times, bars, metre, tonic; CC0). They go
+to DATA_DIR/ref/billboard; the audio comes from YouTube like any other song, accepted only if its
+length matches the annotated recording, and is never part of the repository.
 
 Per song:
   root, majmin   share of time on the right chord root / right major-minor chord (mir_eval's
@@ -12,9 +16,11 @@ Per song:
                  sits a quarter tone off, where the nearest semitone is a toss-up; the score is then
                  the better of the two readings)
   seg            do chord changes fall where the annotated ones do (1 = same segmentation)
-  bars           estimated bar length / annotated bar length (1.00 = as many bars as the annotators)
+  bars           estimated bar length / annotated bar length (1.00 = as many bars as the annotators;
+                 0.50 or 2.00 = the same music counted twice as fast or as slow, a matter of
+                 convention on which the annotators do not always follow the usual tempo either)
   tempo          estimated / annotated tempo of the notated beat (quarter, or dotted quarter in 6/8)
-  time           time signature found (annotated)
+  time           time signature found at the start (annotated)
   down           share of annotated phrase starts that fall on an estimated bar line
 """
 
@@ -228,7 +234,81 @@ def load_set(name: str) -> list[dict]:
     return [{"bb": k, **v, "dir": bb / "McGill-Billboard" / k} for k, v in sorted(mapping.items()) if not k.startswith("_")]
 
 
+ANNOTATIONS = {   # the files of the McGill Billboard project (ddmal.music.mcgill.ca/research/The_McGill_Billboard_Project)
+    "billboard-2.0-index.csv": "https://www.dropbox.com/s/o0olz0uwl9z9stb/billboard-2.0-index.csv?dl=1",
+    "billboard-2.0-salami_chords.tar.gz": "https://www.dropbox.com/s/2lvny9ves8kns4o/billboard-2.0-salami_chords.tar.gz?dl=1",
+    "billboard-2.0.1-lab.tar.gz": "https://www.dropbox.com/s/fg8lvy79o7etiyc/billboard-2.0.1-lab.tar.gz?dl=1",
+}
+DURATION_TOL = 2.5   # s: a YouTube upload is taken for the annotated recording only if this close in length
+
+
+def fetch(want: int = 40, odd: bool = False, seed: int = 42) -> int:
+    """Get the annotations, then a seeded random sample of songs whose audio is found on YouTube."""
+    import csv
+    import random
+    import tarfile
+
+    import httpx
+    import yt_dlp
+
+    from app.pipeline.download import download
+
+    settings = get_settings()
+    bb = settings.data_dir / "ref" / "billboard"
+    bb.mkdir(parents=True, exist_ok=True)
+    for name, url in ANNOTATIONS.items():
+        if not (bb / name).exists():
+            (bb / name).write_bytes(httpx.get(url, follow_redirects=True, timeout=120).raise_for_status().content)
+            if name.endswith(".tar.gz"):
+                with tarfile.open(bb / name) as tar:           # (the .lab archive is xz despite its name)
+                    tar.extractall(bb, filter="data")
+    rows = [r for r in csv.DictReader(open(bb / "billboard-2.0-index.csv")) if r["title"]]
+    seen, songs = set(), []
+    for r in rows:
+        if (key := (r["title"].lower(), r["artist"].lower())) not in seen:
+            seen.add(key)
+            songs.append(r)
+    random.Random(seed).shuffle(songs)
+
+    map_path = bb / ("map-odd.json" if odd else "map.json")
+    mapping = json.loads(map_path.read_text()) if map_path.exists() else {}
+    tried = set(mapping.get("_tried", []))
+    search = yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "extract_flat": True, "noplaylist": True})
+    for r in songs:
+        if sum(1 for k in mapping if not k.startswith("_")) >= want:
+            break
+        bb_id = f"{int(r['id']):04d}"
+        salami_path = bb / "McGill-Billboard" / bb_id / "salami_chords.txt"
+        if bb_id in mapping or bb_id in tried or not salami_path.exists():
+            continue
+        salami = parse_salami(salami_path.read_text())
+        if odd and not {m for *_, m in salami["phrases"]} & {"3/4", "6/8", "12/8"}:
+            continue
+        tried.add(bb_id)
+        try:
+            found = search.extract_info(f"ytsearch5:{r['artist']} {r['title']}", download=False)["entries"]
+            match = next(e for e in found if e.get("duration") and abs(e["duration"] - salami["end"]) <= DURATION_TOL)
+            download(match["id"], settings.songs_dir / match["id"])
+        except StopIteration:
+            print(f"{bb_id} {r['artist']} - {r['title']}: no upload of the right length")
+            continue
+        except Exception as exc:
+            print(f"{bb_id} {r['artist']} - {r['title']}: {type(exc).__name__}")
+            continue
+        finally:
+            mapping["_tried"] = sorted(tried)
+            map_path.write_text(json.dumps(mapping, indent=1))
+            time.sleep(2)
+        mapping[bb_id] = {"youtube_id": match["id"], "title": r["title"], "artist": r["artist"]}
+        map_path.write_text(json.dumps(mapping, indent=1))
+        print(f"{bb_id} {r['artist']} - {r['title']}: {match.get('title')}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "fetch":
+        numbers = [int(a) for a in argv[1:] if a.isdigit()]
+        return fetch(numbers[0] if numbers else 40, odd="odd" in argv)
     from app.pipeline.audio import decode
     from app.pipeline.chords import VERSION, analyze, with_overrides
 

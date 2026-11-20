@@ -28,7 +28,8 @@ from app.pipeline.rhythm import time_signature
 
 SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 STEP = 0.05          # s, grid used to slide the audio against the annotation
-MAX_SHIFT = 3.0      # s
+MAX_SHIFT = 8.0      # s
+MAX_SCALE = 1.03     # the audio may run up to 3 % faster or slower than the annotated recording
 BEATS = {"4/4": 4, "3/4": 3, "2/4": 2, "6/8": 2, "12/8": 4, "9/8": 3, "5/4": 5, "7/4": 7, "6/4": 6}
 _INLINE_METRE = re.compile(r"\(\d+/\d+\)")
 _REPEAT = re.compile(r"\bx(\d+)\b")
@@ -75,6 +76,25 @@ def reference_rhythm(salami: dict) -> dict:
             "phrase_starts": starts, "metre": salami["metre"]}
 
 
+def load_lab(path: Path) -> tuple[np.ndarray, list[str]]:
+    """(intervals, labels) of a .lab file; blank or broken lines (some files end with one) are skipped."""
+    intervals, labels = [], []
+    for line in path.read_text().splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            intervals.append([float(parts[0]), float(parts[1])])
+            labels.append(parts[2])
+    return _contiguous(np.array(intervals)), labels
+
+
+def _contiguous(intervals: np.ndarray) -> np.ndarray:
+    """Close hairline gaps and overlaps (rounding in the files) between consecutive intervals."""
+    out = intervals.copy()
+    close = np.abs(out[1:, 0] - out[:-1, 1]) < 1e-6
+    out[1:, 0] = np.where(close, out[:-1, 1], out[1:, 0])
+    return out
+
+
 def harte(chord) -> str:
     """Our chord (None/"N" or [root, quality, ...]) in the syntax mir_eval reads."""
     if chord is None or chord == "N":
@@ -94,43 +114,56 @@ def _grid(intervals: np.ndarray, labels: list[str], duration: float) -> np.ndarr
     return np.where(ok, ids[np.clip(idx, 0, len(ids) - 1)], -1)
 
 
-def best_offset(ref_iv, ref_lab, est_iv, est_lab) -> float:
-    """Seconds to add to the estimated times so that they agree best with the annotation
-    (the YouTube upload rarely starts exactly like the annotated recording)."""
-    duration = float(max(ref_iv[-1, 1], est_iv[-1, 1]))
-    ref, est = _grid(ref_iv, ref_lab, duration), _grid(est_iv, est_lab, duration)
-    best, best_score = 0.0, -1.0
-    for k in range(-int(MAX_SHIFT / STEP), int(MAX_SHIFT / STEP) + 1):
-        a, b = (ref[k:], est[:len(est) - k]) if k >= 0 else (ref[:k], est[-k:])
-        score = float(np.sum((a == b) & (a >= 0)))
-        if score > best_score + 1e-9 or (abs(score - best_score) <= 1e-9 and abs(k) < abs(best / STEP)):
-            best, best_score = k * STEP, score
-    return best
+def align(ref_iv, ref_lab, est_iv, est_lab) -> tuple[float, float]:
+    """(scale, offset) such that annotation time = scale × audio time + offset agrees best.
+
+    The YouTube upload rarely starts exactly like the annotated recording, and transfers of old
+    records often run a little faster or slower."""
+    duration = float(max(ref_iv[-1, 1], est_iv[-1, 1] * MAX_SCALE)) + MAX_SHIFT
+    ref = _grid(ref_iv, ref_lab, duration)
+    shifts = range(-int(MAX_SHIFT / STEP), int(MAX_SHIFT / STEP) + 1)
+
+    def search(scales, shifts) -> tuple[float, float, int]:
+        best = (-1.0, 1.0, 0)
+        for scale in scales:
+            est = _grid(est_iv * scale, est_lab, duration)
+            for k in shifts:
+                a, b = (ref[k:], est[:len(est) - k]) if k >= 0 else (ref[:k], est[-k:])
+                agree = float(np.sum((a == b) & (a >= 0)))
+                # prefer no stretch and no shift unless the gain is real (ten steps of agreement)
+                agree -= 10 * (abs(scale - 1) > 1e-6) + 0.01 * abs(k)
+                if agree > best[0]:
+                    best = (agree, float(scale), k)
+        return best
+
+    _, scale, k = search(1 + 0.0025 * np.arange(-12, 13), shifts)                # coarse, then fine
+    _, scale, k = search(scale + 0.0005 * np.arange(-4, 5), range(k - 6, k + 7))
+    return scale, k * STEP
 
 
-def score(analysis: dict, bb_dir: Path, offset: float | None = None) -> dict:
+def score(analysis: dict, bb_dir: Path, alignment: tuple[float, float] | None = None) -> dict:
     import mir_eval
 
     salami = parse_salami((bb_dir / "salami_chords.txt").read_text())
     ref = reference_rhythm(salami)
-    ref_iv, ref_lab = mir_eval.io.load_labeled_intervals(str(bb_dir / "majmin7.lab"))
+    ref_iv, ref_lab = load_lab(bb_dir / "majmin7.lab")
     segs = analysis["segments"]
     est_iv = np.array([[s["start"], s["end"]] for s in segs])
     est_lab = [harte(s["chord"]) for s in segs]
-    if offset is None:
-        offset = best_offset(ref_iv, ref_lab, est_iv, est_lab)
-    shifted = np.clip(est_iv + offset, 0, None)
+    scale, offset = alignment or align(ref_iv, ref_lab, est_iv, est_lab)
+    shifted = _contiguous(np.clip(est_iv * scale + offset, 0, None))
     keep = shifted[:, 1] > shifted[:, 0]
     res = mir_eval.chord.evaluate(ref_iv, ref_lab, shifted[keep], [l for l, k in zip(est_lab, keep) if k])
-    row = {"off": round(offset, 2), "root": res["root"], "majmin": res["majmin"], "7ths": res["sevenths"],
+    row = {"off": round(offset, 2), "scale": round(scale, 4), "root": res["root"], "majmin": res["majmin"], "7ths": res["sevenths"],
            "seg": res["seg"], "time": time_signature(analysis.get("meter", 4)), "ref_time": ref["metre"]}
     downs = np.asarray(analysis.get("downbeats") or [])
     if ref["bar"] and len(downs) > 2:
+        downs = downs * scale + offset                                         # in annotation time
         est_bar = float(np.median(np.diff(downs)))
         row["bars"] = est_bar / ref["bar"]
-        row["tempo"] = analysis["tempo"] / ref["tempo"]
+        row["tempo"] = analysis["tempo"] / scale / ref["tempo"]
         tol = 0.25 * ref["bar"] / max(BEATS.get(ref["metre"], 4), 1)          # a quarter of a beat
-        starts = np.array(ref["phrase_starts"]) - offset
+        starts = np.array(ref["phrase_starts"])
         starts = starts[(starts >= downs[0] - tol) & (starts <= downs[-1] + tol)]
         if len(starts):
             row["down"] = float(np.mean([np.min(np.abs(downs - s)) <= tol for s in starts]))

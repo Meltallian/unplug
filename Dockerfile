@@ -17,6 +17,10 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
 ADD --chmod=755 --checksum=sha256:8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331 \
     https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt /opt/models/beat_this-final0.ckpt
 ENV BEAT_THIS_CHECKPOINT=/opt/models/beat_this-final0.ckpt
+# BTC chord model weights (Park et al., ISMIR 2019, MIT licence), pinned to a commit and a checksum
+ADD --chmod=644 --checksum=sha256:1673d23f8f9a55ae7f9e8b80a51da616debb22675b8d8b67ea6ce0ef37b0ab51 \
+    https://raw.githubusercontent.com/jayg996/BTC-ISMIR19/2682317be668032e6e4b269ded36adaa2ad57df0/test/btc_model_large_voca.pt /opt/models/btc_model_large_voca.pt
+ENV BTC_CHECKPOINT=/opt/models/btc_model_large_voca.pt
 
 WORKDIR /srv
 COPY pyproject.toml uv.lock ./

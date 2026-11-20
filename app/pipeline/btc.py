@@ -169,23 +169,29 @@ def _plain_number(dtype, data):
     return np.frombuffer(data, dtype=np.dtype(order + dtype.code))[0]
 
 
-@lru_cache(maxsize=1)
-def _model():
-    """(network, feature mean, feature std). The checkpoint is read with torch's restricted
-    loader: tensors and plain numbers only, never arbitrary pickled code."""
+def read_checkpoint(path: Path) -> tuple[dict, float, float]:
+    """(network weights, feature mean, feature std) from the published checkpoint file. It is read
+    with torch's restricted loader: tensors and plain numbers only, never arbitrary pickled code."""
     import torch
 
-    path = Path(CHECKPOINT)
-    if not path.exists():
-        raise FileNotFoundError(f"chord model weights not found at {path} (set BTC_CHECKPOINT)")
-    allowed = [(_plain_number, "numpy.core.multiarray.scalar"), (_NumberType, "numpy.dtype")]
+    allowed = [(_plain_number, "numpy.core.multiarray.scalar"), (_plain_number, "numpy._core.multiarray.scalar"),
+               (_NumberType, "numpy.dtype")]
     with torch.serialization.safe_globals(allowed):
         checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     state = {k: v for k, v in checkpoint["model"].items() if not k.startswith("output_layer.lstm.")}  # unused layer
+    return state, float(checkpoint["mean"]), float(checkpoint["std"])
+
+
+@lru_cache(maxsize=1)
+def _model():
+    path = Path(CHECKPOINT)
+    if not path.exists():
+        raise FileNotFoundError(f"chord model weights not found at {path} (set BTC_CHECKPOINT)")
+    state, mean, std = read_checkpoint(path)
     net = _build()
     net.load_state_dict(state)
     net.eval()
-    return net, float(checkpoint["mean"]), float(checkpoint["std"])
+    return net, mean, std
 
 
 def cqt_features(y: np.ndarray, sr: int, offset_s: float = 0.0) -> np.ndarray:

@@ -42,9 +42,10 @@ PARAMS = Params()
 VERSION = "btc-1"
 
 # The decoder first chooses among the 24 major and minor chords; every richer chord of the model
-# counts towards the plain chord a guitarist would strum instead.
-_FAMILY = {"maj": ("maj", "maj6", "maj7", "7", "sus2", "sus4", "aug"),
-           "min": ("min", "min6", "min7", "minmaj7", "dim", "dim7", "hdim7")}
+# counts towards the plain chord a guitarist would strum instead. A sus chord has no third, so it
+# speaks for the major and the minor chord of its root alike.
+_FAMILY = {"maj": ("maj", "maj6", "maj7", "7", "aug", "sus2", "sus4"),
+           "min": ("min", "min6", "min7", "minmaj7", "dim", "dim7", "hdim7", "sus2", "sus4")}
 # ... and these are written out when the model is sure of them (sixths stay plain chords)
 _WRITTEN = ("7", "maj7", "min7", "sus4", "sus2", "dim", "dim7", "hdim7", "aug")
 
@@ -182,22 +183,23 @@ def decode_beats(probs: np.ndarray, rms: np.ndarray, times: np.ndarray, pos: np.
     return segments, key
 
 
-def display_tempo(bpm: float) -> float:
-    """Beat trackers often lock onto double time; strummed songs rarely exceed ~135 bpm per beat."""
-    while 135 < bpm < 10_000:
-        bpm /= 2
-    return bpm
+def novelty(probs: np.ndarray) -> np.ndarray:
+    """How much the harmony moves on each beat (0 = same chord as the beat before, 1 = another one)."""
+    family = probs @ _family_matrix().T + 1e-9
+    family /= family.sum(axis=1, keepdims=True)
+    same = np.sum(np.sqrt(family[1:] * family[:-1]), axis=1)
+    return np.concatenate([[0.0], 1.0 - same])
 
 
 def decode(feats: dict, p: Params = PARAMS) -> dict:
     duration = float(feats["duration"])
     beats, downbeats = rhythm.pick(feats["beat_act"], feats["down_act"])
-    beats = beats[(beats > 0.05) & (beats < duration - 0.05)]
-    meter, beat_pos = rhythm.fit_grid(beats, downbeats)
+    beats = rhythm.regular_beats(beats[(beats > 0.05) & (beats < duration - 0.05)], duration)
     times = np.concatenate([[0.0], beats, [duration]])
-    pos = np.concatenate([[-1], beat_pos])           # the stretch before the first beat has no bar position
     probs = span_means(feats["probs"], btc.FRAME_S, times)
     rms = span_means(feats["rms"], float(feats["rms_step"]), times)
+    meter, beat_pos = rhythm.bar_grid(beats, downbeats, novelty(probs)[1:])
+    pos = np.concatenate([[-1], beat_pos])           # the stretch before the first beat has no bar position
     segments, key = decode_beats(probs, rms, times, pos, meter, p)
 
     weighted = [(s["chord"], s["end"] - s["start"]) for s in segments if s["chord"] != "N"]
@@ -205,7 +207,7 @@ def decode(feats: dict, p: Params = PARAMS) -> dict:
         "version": VERSION,
         "params": asdict(p),
         "tuning_semitones": round(float(feats["tuning"]), 3),
-        "tempo": display_tempo(rhythm.tempo(beats)),
+        "tempo": round(rhythm.notated_tempo(beats, meter), 2),
         "meter": meter,
         "downbeats": [round(float(t), 3) for t, q in zip(times, pos) if q == 0],
         "key": {"tonic": key[0], "mode": key[1], "name": key_name(key)},

@@ -34,8 +34,8 @@ MODEL = os.environ.get("WHISPER_MODEL", "tiny")       # name or path of the Whis
                                                       # twice as slow and no closer on our test songs)
 WINDOW = 28.0           # s of audio given to the model at a time (it takes 30)
 LEAD = 0.4              # s of audio before the first line of a window
-TRUST = 1.0             # s: an aligned line must start this close to its own time to be believed
-SURE = 0.2              # ... and the model must give its words at least this probability on average
+TRUST = 1.0             # s: an aligned line must start this close to its own time for its word times to be used
+SURE = 0.2              # a line counts as heard if the model also gives its words this probability on average
                         # (lines in the right place: 65 % pass both; lines 17 s away: 4 %)
 SAME_WORDS = 0.75       # a line is found in the transcript where the text is this alike (0..1)
 MIN_WORDS = 3           # shorter lines are found in too many places to say where they are
@@ -152,13 +152,13 @@ def align(lines: list[dict], y: np.ndarray, sr: int, language: str | None = None
             n = len(lines[i]["text"].split())
             got, prob = times[k:k + n], float(np.mean(sure[k:k + n])) if n else 0.0
             k += n
-            ok = bool(n) and abs(got[0] - lines[i]["t"]) <= TRUST and prob >= SURE
-            if ok:
+            late = got[0] - lines[i]["t"] if n else 0.0
+            if n and abs(late) <= TRUST:               # starts where the line does: its word times are used
                 last = lines[i + 1]["t"] + 0.3 if i + 1 < len(lines) else np.inf
                 got = np.maximum.accumulate(np.clip(got, lines[i]["t"] - 0.3, last))
                 out[i] = [round(float(t), 2) for t in got]
-            if report is not None and n:
-                report.append({"line": i, "heard": ok, "sure": prob, "late": got[0] - lines[i]["t"]})
+            if report is not None and n:               # ... and "heard" if the model also finds the words likely
+                report.append({"line": i, "heard": abs(late) <= TRUST and prob >= SURE, "sure": prob, "late": late})
     return out
 
 

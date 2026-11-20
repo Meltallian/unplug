@@ -89,8 +89,8 @@ as LRCLIB would give them. Error on the start of each word, first words of lines
 | heard by Whisper tiny, fallback for lines not heard | 0.09 s | 79 % | 94 % |
 
 Whisper "base" gives the same (0.09 s, 80 %, 95 %) for twice the time, so "tiny" is used. French
-does as well as English (83 % and 74 % within 0.3 s). This set is not in the repository's
-benchmark command; the script that produced the table is not kept in the tree.
+does as well as English (83 % and 74 % within 0.3 s). `make words` (or `python -m
+app.eval.words`, after `... fetch`) reproduces the table.
 
 Two cases found on the way, both now handled: the official video of the owner's test song adds
 8.9 s before the song and 4.5 s more before the last chorus (found by the reference recording);

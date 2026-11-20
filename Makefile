@@ -1,6 +1,6 @@
 COMPOSE = docker compose
 
-.PHONY: up down logs build test lock eval bench shell
+.PHONY: up down logs build test lock eval bench words shell
 
 up:      ## build and start everything
 	$(COMPOSE) up -d --build
@@ -18,5 +18,7 @@ eval:   ## score every fixture with the cached pipeline
 	$(COMPOSE) run --rm --no-deps worker python -m app.eval.run $(ARGS)
 bench:  ## score against the McGill Billboard annotations (see app/eval/bench.py; ARGS="map sharpness=2")
 	$(COMPOSE) run --rm --no-deps worker sh -c "cd /srv && uv sync --frozen --group dev -q && python -m app.eval.bench $(ARGS)"
+words:  ## score the word timing against hand-timed songs (see app/eval/words.py)
+	$(COMPOSE) run --rm --no-deps worker python -m app.eval.words $(ARGS)
 shell:
 	$(COMPOSE) exec web bash

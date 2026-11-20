@@ -167,3 +167,12 @@ def test_pulse_is_what_most_of_the_time_is_counted_in():
     from app.pipeline.rhythm import _typical
     assert _typical(np.array([0.28] * 90 + [0.84] * 100)) == 0.84     # 25 s of triplets, 84 s of beats
     assert _typical(np.array([0.4] * 380 + [0.8] * 100)) == 0.4      # 152 s of eighths, 80 s of quarters
+
+
+def test_downbeats_reported_where_no_music_plays_do_not_change_the_count():
+    beats = np.arange(300) * 0.4                              # 150 a minute: 6/8, then a silent video outro
+    downs = np.concatenate([beats[:204:3], beats[204::4]])   # in the outro the tracker "hears" bars of four
+    quiet = np.arange(300) >= 204
+    assert bar_grid(beats, downs).sections()[-1]["meter"] == 4          # believed: the song ends in 4/4
+    grid = bar_grid(beats, downs, quiet=quiet)
+    assert [s["meter"] for s in grid.sections()] == [6]

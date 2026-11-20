@@ -503,3 +503,22 @@ def test_built_chart_reads_back_bar_for_bar():
     assert len(bars) == 8 and score["unbarred"] == 0          # 16 s of 2 s bars, none lost or doubled
     assert _beats(bars[1]) == ["Am", "", "", ":one"]          # "%" repeats Am; the pickup on the last beat
     assert _beats(bars[2])[0] == "C:two"
+
+
+def test_one_long_block_is_cut_into_verses_and_choruses_by_the_lines_that_come_back():
+    from app.pipeline.chart import _split_by_repetition
+    chorus = ["Help me get out of it", "I can't keep my head up", "Please tell me, how do you feel", "I'm drowning in this river"]
+    verse = ["It's hard to take", "For you, I'm a pawn", "Tried to make amends"]
+    texts = chorus + verse + ["Oh, please tell me, how do you feel" if x.startswith("Please") else x for x in chorus] + chorus
+    block = {"kind": "lyrics", "lines": [(float(i), float(i + 1), text) for i, text in enumerate(texts)]}
+    parts = _split_by_repetition([{"kind": "inst", "start": 0.0, "end": 1.0}, block])
+    assert [(p["kind"], p.get("repeats"), len(p.get("lines", []))) for p in parts] == \
+        [("inst", None, 0), ("lyrics", True, 4), ("lyrics", False, 3), ("lyrics", True, 4), ("lyrics", True, 4)]
+
+
+def test_a_refrain_line_inside_a_verse_does_not_cut_it():
+    from app.pipeline.chart import _split_by_repetition
+    texts = ["Line one", "Line two", "Hallelujah", "Line four", "Line five", "Line six", "Hallelujah", "Line eight"]
+    block = {"kind": "lyrics", "lines": [(float(i), float(i + 1), text) for i, text in enumerate(texts)]}
+    parts = _split_by_repetition([block])
+    assert [(p["repeats"], len(p["lines"])) for p in parts] == [(False, 8)]

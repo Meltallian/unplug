@@ -169,7 +169,7 @@ def _harmony_bonus(novelty: np.ndarray | None, weight: float, n: int) -> np.ndar
 GROUPS = (4, 3, 6)   # beats per bar the grid may count; 4 first: the default
 
 
-def _fit(near: np.ndarray, bonus: np.ndarray, groups: tuple = GROUPS) -> tuple[np.ndarray, np.ndarray]:
+def _fit(near: np.ndarray, bonus: np.ndarray, groups: tuple = GROUPS, quiet: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Viterbi over (bars of 4 | 3 | 6 beats) × position in the bar. Score: +1 for a "1" on a
     detected downbeat, -1 for a detected downbeat elsewhere, -miss for a "1" without one, plus
     `bonus` on a "1". A bar may be cut short, and the bar length may change at a bar line, each
@@ -178,6 +178,7 @@ def _fit(near: np.ndarray, bonus: np.ndarray, groups: tuple = GROUPS) -> tuple[n
     `miss` follows how many downbeats the tracker sees around there (2d/(1-d) for a share d of
     beats): with that, downbeats scattered at random score the same for every bar length, so a
     bar length wins on the pattern of the downbeats, not on how many "1"s it has to offer.
+    On `quiet` beats (no music playing) nothing is scored: what the tracker reports there is noise.
     Returns, for every beat, the length of its bar (4, 3 or 6) and its position in it."""
     n = len(near)
     offsets = np.concatenate([[0], np.cumsum(groups)])            # state index of each bar length's "1"
@@ -188,6 +189,8 @@ def _fit(near: np.ndarray, bonus: np.ndarray, groups: tuple = GROUPS) -> tuple[n
     emit = np.tile(np.where(near, -1.0, 0.0)[:, None], (1, k))
     for g, o in zip(groups, offsets):
         emit[:, o] = np.where(near, 1.0, -miss) + bonus - BAR_COST[g]
+    if quiet is not None:
+        emit[quiet] = 0.0          # no music, no evidence: the grid just runs on
     score = emit[0].copy()
     back = np.zeros((n, k), dtype=int)
     for i in range(1, n):
@@ -279,23 +282,28 @@ def _pair(evidence: np.ndarray) -> np.ndarray:
     return is_start
 
 
-def bar_grid(beats: np.ndarray, downbeats: np.ndarray, novelty: np.ndarray | None = None) -> Grid:
+def bar_grid(beats: np.ndarray, downbeats: np.ndarray, novelty: np.ndarray | None = None,
+             quiet: np.ndarray | None = None) -> Grid:
     """The bars a guitarist counts (see the module docstring). `novelty`: how much the chord
-    changes on each beat; it helps where the downbeats cannot tell."""
+    changes on each beat; it helps where the downbeats cannot tell. `quiet`: beats on which no
+    music plays (a video intro or outro); downbeats reported there are ignored."""
     n = len(beats)
     if n == 0:
         return Grid(beats, np.zeros(0, dtype=int), np.zeros(0, dtype=int), np.zeros(0, dtype=int))
     near = _near(beats, downbeats)
+    if quiet is not None:
+        near &= ~quiet
     groups = GROUPS if near.sum() >= MIN_DOWNBEATS else (4,)      # no downbeats to speak of: in four
     bonus = _harmony_bonus(novelty, HARMONY_WEIGHT, n)
-    group, pos = _fit(near, bonus, groups)
+    group, pos = _fit(near, bonus, groups, quiet)
     # A few bars in another count (often in a fade-out, where the tracker wavers) are no section:
     # they are counted like the stretch before them (or after, at the very start).
     edges = [0] + [i for i in range(1, n) if pos[i] == 0 and (group[i] == 4) != (group[i - 1] == 4)] + [n]
     for j, (a, b) in enumerate(zip(edges, edges[1:])):
         if b - a < MIN_STRETCH and len(edges) > 2:
             like = group[a - 1] if j > 0 else group[b]
-            group[a:b], pos[a:b] = _fit(near[a:b], bonus[a:b], (4,) if like == 4 else (3, 6))
+            group[a:b], pos[a:b] = _fit(near[a:b], bonus[a:b], (4,) if like == 4 else (3, 6),
+                                        None if quiet is None else quiet[a:b])
     fast = tempo(beats) >= COMPOUND_BPM
     compound = fast and bool(np.any(group != 4))        # the pulse is the eighth note of 6/8 somewhere
     evidence = near.astype(float) + _harmony_bonus(novelty, PAIRING_WEIGHT, n)

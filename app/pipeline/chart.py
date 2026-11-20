@@ -19,6 +19,7 @@ bars existed (lines without "|") still read: they simply carry no bar informatio
 import bisect
 import re
 from collections import Counter
+from difflib import SequenceMatcher
 
 from app.music import chord_name, transpose
 from app.pipeline.rhythm import time_signature
@@ -387,6 +388,57 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", text.lower()).strip()
 
 
+SAME_LINE = 0.8      # two sung lines this alike (0..1) are the same line ("Oh, please tell me" / "Please tell me")
+MIN_REFRAIN = 2      # lines: a shorter repeated run is a refrain line inside a verse, not a section
+
+
+def _alike(a: str, b: str) -> bool:
+    return bool(a) and bool(b) and SequenceMatcher(None, a, b).ratio() >= SAME_LINE
+
+
+def _split_by_repetition(blocks: list[dict]) -> list[dict]:
+    """Cut lyric blocks where the song goes from lines sung once to lines that come back, or the
+    other way: synced lyrics often arrive as one long block, and the part that comes back is the
+    chorus. Each lyric block gets "repeats": True/False. A chorus sung twice in a row is cut where
+    its first line comes round again."""
+    texts = [_norm(text) for b in blocks if b["kind"] == "lyrics" for *_, text in b["lines"]]
+    comes_back = [any(_alike(a, b) for j, b in enumerate(texts) if j != i) for i, a in enumerate(texts)]
+    out: list[dict] = []
+    seen = 0
+    for block in blocks:
+        if block["kind"] != "lyrics":
+            out.append(block)
+            continue
+        n = len(block["lines"])
+        flags, norm = comes_back[seen:seen + n], texts[seen:seen + n]
+        seen += n
+        for i in range(1, n - 1):                    # one odd line between two of the other kind follows them
+            if flags[i - 1] == flags[i + 1] != flags[i]:
+                flags[i] = flags[i - 1]
+        runs: list[list[int]] = []
+        for i in range(n):
+            if runs and flags[runs[-1][-1]] == flags[i]:
+                runs[-1].append(i)
+            else:
+                runs.append([i])
+        merged: list[list[int]] = []                 # a run too short to be a section joins its neighbour
+        for run in runs:
+            if merged and (len(run) < MIN_REFRAIN or len(merged[-1]) < MIN_REFRAIN):
+                merged[-1] += run
+            else:
+                merged.append(run)
+        for run in merged:
+            repeats = sum(flags[i] for i in run) * 2 > len(run)
+            parts, first = [[]], norm[run[0]]
+            for i in run:
+                if repeats and len(parts[-1]) >= MIN_REFRAIN and _alike(norm[i], first):
+                    parts.append([])                 # the first line again: the chorus starts over
+                parts[-1].append(i)
+            for part in parts:
+                out.append({"kind": "lyrics", "lines": [block["lines"][i] for i in part], "repeats": repeats})
+    return out
+
+
 def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tuple],
                    lyrics: dict, duration: float) -> str:
     capo = analysis["capo"]
@@ -442,6 +494,7 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
         blocks.append({"kind": "inst", "start": prev_end, "end": duration})
 
     # 2. Name the sections.
+    blocks = _split_by_repetition(blocks)
     lyric_blocks = [b for b in blocks if b["kind"] == "lyrics"]
     keys = Counter(_norm(" ".join(x for *_, x in b["lines"])) for b in lyric_blocks)
     chorus_key = None
@@ -458,7 +511,7 @@ def build_chordpro(*, title: str, artist: str, analysis: dict, segments: list[tu
             b["name"] = "Intro" if b is blocks[0] else ("Outro" if b is blocks[-1] else "Interlude")
             if n_inst == 1 and b is not blocks[0] and b is not blocks[-1]:
                 b["name"] = "Interlude"
-        elif _norm(" ".join(x for *_, x in b["lines"])) == chorus_key:
+        elif b.get("repeats") and len(b["lines"]) >= MIN_REFRAIN or _norm(" ".join(x for *_, x in b["lines"])) == chorus_key:
             b["name"] = "Chorus"
         else:
             verse += 1

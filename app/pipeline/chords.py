@@ -39,7 +39,7 @@ class Params:
 
 
 PARAMS = Params()
-VERSION = "btc-1"
+VERSION = "btc-2"
 
 # The decoder first chooses among the 24 major and minor chords; every richer chord of the model
 # counts towards the plain chord a guitarist would strum instead. A sus chord has no third, so it
@@ -246,7 +246,9 @@ def decode(feats: dict, p: Params = PARAMS) -> dict:
     times = np.concatenate([[0.0], beats, [duration]])
     probs = span_means(feats["probs"], btc.FRAME_S, times)
     rms = span_means(feats["rms"], float(feats["rms_step"]), times)
-    grid = rhythm.bar_grid(beats, downbeats, novelty(probs, p.sharpness)[1:])
+    # no music: the model says "no chord" or the beat is all but silent
+    quiet = (probs[:, btc.N_INDEX] > 0.5) | (rms < p.silence_ratio * np.median(rms))
+    grid = rhythm.bar_grid(beats, downbeats, novelty(probs, p.sharpness)[1:], quiet[1:])
     pos = np.concatenate([[-1], grid.pos])           # the stretch before the first beat has no bar position
     size = np.concatenate([grid.size[:1], grid.size]) if len(beats) else np.array([4])
     unit = np.concatenate([grid.unit[:1], grid.unit]) if len(beats) else np.array([1])

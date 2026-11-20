@@ -166,3 +166,13 @@ def test_every_chord_diagram_sounds_its_chord():
         assert diagram_svg(name).startswith("<svg")
     assert shape_key("Em7") == "Em7" and shape_key("Dsus4") == "Dsus4" and shape_key("Gadd9") == "G"
     assert shape_key("Bbm7") == "Bbm" and shape_key("N.C.") is None
+
+
+def test_key_is_the_scale_that_holds_the_chords_not_the_chord_played_most():
+    from app.music import key_of_song
+    # A is played most, but G and Em are not in A major: the song is in D
+    assert key_of_song([((9, "maj"), 66), ((2, "maj"), 60), ((4, "min"), 34), ((7, "maj"), 18), ((11, "min"), 10)]) == (2, "major")
+    # same chords, major or relative minor: the home chord decides
+    assert key_of_song([((9, "min"), 50), ((0, "maj"), 20), ((7, "maj"), 20), ((5, "maj"), 10)]) == (9, "minor")
+    assert key_of_song([((0, "maj"), 50), ((9, "min7"), 20), ((7, "7"), 20), ((5, "maj"), 10)]) == (0, "major")
+    assert key_of_song([]) == (0, "major")

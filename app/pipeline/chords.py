@@ -19,7 +19,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from app.music import ALL_CHORDS, chord_name, choose_capo, diatonic, estimate_key, key_name, triad_pcs
+from app.music import ALL_CHORDS, chord_name, choose_capo, diatonic, estimate_key, key_name, key_of_song, triad_pcs
 from app.pipeline import btc, rhythm
 
 FEATURES_VERSION = "f5"
@@ -256,6 +256,8 @@ def decode(feats: dict, p: Params = PARAMS) -> dict:
 
     meters = grid.sections()
     weighted = [(s["chord"], s["end"] - s["start"]) for s in segments if s["chord"] != "N"]
+    if weighted:
+        key = key_of_song(weighted)                   # the first guess (before decoding) only steered the decoder
     return {
         "version": VERSION,
         "params": asdict(p),

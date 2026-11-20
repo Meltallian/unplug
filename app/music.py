@@ -109,6 +109,28 @@ def key_from_chords(chords: list[tuple[Chord, float]]) -> Key:
     return estimate_key(prof)
 
 
+TONIC_WEIGHT = 0.3   # how much the time spent on the key's own chord counts next to the time on chords of its scale
+
+
+def key_of_song(chords: list[tuple[Chord, float]]) -> Key:
+    """Key of a song from its chords and the time spent on each: the key whose scale holds most of
+    them, and among keys that do equally well (a major key and its relative minor share their
+    chords) the one whose own chord is played most."""
+    seconds: dict[Chord, float] = {}
+    for chord, weight in chords:
+        seconds[plain(chord)] = seconds.get(plain(chord), 0.0) + weight
+    total = sum(seconds.values())
+    if not total:
+        return (0, "major")
+
+    def fit(key: Key) -> float:
+        own = (key[0], "maj" if key[1] == "major" else "min")
+        scale = diatonic(key)
+        return (sum(w for c, w in seconds.items() if c in scale) + TONIC_WEIGHT * seconds.get(own, 0.0)) / total
+
+    return max(((tonic, mode) for mode in ("major", "minor") for tonic in range(12)), key=fit)
+
+
 def diatonic(key: Key) -> set[Chord]:
     """Chords that fit the key. In minor, the major V is allowed too."""
     t, mode = key

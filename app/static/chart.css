@@ -9,7 +9,8 @@ body.chart-page { padding-bottom: 72px; overflow-anchor: none; }
 .facts-row { display: flex; align-items: center; gap: 10px; }
 .facts { flex: 1; min-width: 0; font-size: .9rem; margin: 4px 0; }
 .facts b { font-weight: 700; }
-/* Score | Lyrics */
+/* Score | Lyrics: <html data-view> says which of the two is shown */
+html[data-view="score"] #lyrics, html[data-view="lyrics"] #score { display: none; }
 .views { flex: 0 0 auto; display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .views button { background: transparent; color: var(--muted); border: 0; border-radius: 0; padding: 5px 11px; font-size: .8rem; }
 .views button[aria-pressed="true"] { background: var(--accent); color: #fff; }

@@ -158,10 +158,13 @@ def to_mei(score: dict, *, semis: int = 0, key: str = "", capo: int = 0,
                         syl = _el(syl, "rend", {"fontsize": f"{small[n]}%"})
                     syl.text = " ".join(beat["words"])
             if new_tempo and (mark := tempo_mark(bar["tempo"], (count, unit))):
-                el = _el(measure, "tempo", {"tstamp": 1, "staff": 1, "place": "above"})
+                # Written as rehearsal text, not as <tempo>: Verovio puts a tempo mark between the
+                # staff and the chord symbols, which lifts the chord line of the whole system.
+                # Rehearsal text goes above the chords, where an edition prints a tempo.
+                el = _el(measure, "reh", {"tstamp": 1, "staff": 1, "type": "tempo"})
                 _el(el, "rend", {"glyph.auth": "smufl"}, mark[0]).tail = f" = {mark[1]}"
             if i == 0 and section["name"]:
-                _el(measure, "reh", {"tstamp": 1, "staff": 1}, section["name"])
+                _el(measure, "reh", {"tstamp": 1, "staff": 1, "type": "section"}, section["name"])
             step = count / beats                # one beat in time-signature units (3 eighths in 6/8)
             for b, beat in enumerate(bar["beats"]):
                 for k, (name, index) in enumerate(beat["chords"]):

@@ -6,6 +6,9 @@
   <title>{{ chart.meta.get("title") or song.title }} · unplug</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/chart.css">
+  <script>/* the view chosen last time, before anything is painted */
+    try { document.documentElement.dataset.view = localStorage.getItem("unplug.view") === '"lyrics"' ? "lyrics" : "score"; } catch (e) { document.documentElement.dataset.view = "score"; }
+  </script>
 </head>
 <body class="chart-page">
 <header class="chart-head" id="head">
@@ -37,7 +40,7 @@
       data-tempo="{{ chart.meta.get('tempo', '') }}" data-time="{{ chart.meta.get('time', '') }}">
   {% if own %}<p class="note">Your edited version. <form method="post" action="/songs/{{ song.id }}/reset" class="inline"
      onsubmit="return confirm('Discard your edits and go back to the automatic chart?')"><button class="link">Back to the automatic chart</button></form></p>{% endif %}
-  <div class="score" id="score" hidden aria-label="Engraved score"></div>
+  <div class="score" id="score" aria-label="Engraved score"></div>
   <div class="lyrics" id="lyrics">
   {% for section in chart.sections %}
   <section>

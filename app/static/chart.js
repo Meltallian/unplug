@@ -95,11 +95,9 @@
     document.getElementById("key-label").textContent = state.key ? (state.key > 0 ? "+" : "") + state.key : "Key";
     document.documentElement.style.setProperty("--chart-size", state.size + "px");
     document.getElementById("pdf-link").href = `/songs/${sheet.dataset.song}/pdf?capo=${state.capo}&key=${state.key}`;
-    const score = state.view === "score";
-    scoreEl.hidden = !score;
-    lyricsEl.hidden = score;
+    document.documentElement.dataset.view = state.view;      // the stylesheet shows one view and hides the other
     document.querySelectorAll("#views button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === state.view)));
-    if (score) loadScore();
+    if (state.view === "score") loadScore();
   }
 
   // --- engraved score ------------------------------------------------------------------------

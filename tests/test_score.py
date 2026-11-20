@@ -123,8 +123,8 @@ def test_mei_sections_have_rehearsal_marks_and_double_bars():
     root = _mei()
     sections = root.findall(f".//{MEI}score/{MEI}section")
     assert [s.get("label") for s in sections] == ["Intro", "Verse 1"]
-    rehs = {m.get("n"): _text(m.find(f"{MEI}reh")) for m in root.iter(f"{MEI}measure") if m.find(f"{MEI}reh") is not None}
-    assert rehs == {"1": "Intro", "4": "Verse 1"}
+    rehs = {m.get("n"): [(r.get("type"), _text(r)) for r in m.iter(f"{MEI}reh")] for m in root.iter(f"{MEI}measure")}
+    assert {n: marks for n, marks in rehs.items() if marks} == {"1": [("section", "Intro")], "4": [("section", "Verse 1")]}
     assert [m.get("right") for m in root.iter(f"{MEI}measure")] == [None, None, "dbl", None, None, "end"]
 
 
@@ -145,8 +145,9 @@ def test_mei_meter_change_has_time_signature_and_tempo_mark():
     verse = root.findall(f".//{MEI}score/{MEI}section")[1]
     assert [el.tag.replace(MEI, "") for el in verse] == ["scoreDef", "measure", "measure", "measure"]
     assert (verse[0].get("meter.count"), verse[0].get("meter.unit")) == ("4", "4")
-    tempos = {m.get("n"): _text(m.find(f"{MEI}tempo")) for m in root.iter(f"{MEI}measure") if m.find(f"{MEI}tempo") is not None}
-    assert tempos == {"3": "\uECA5 = 75", "5": "\uECA5 = 80"}       # the first tempo is in the header
+    marks = {m.get("n"): [(r.get("type"), _text(r)) for r in m.iter(f"{MEI}reh")] for m in root.iter(f"{MEI}measure")}
+    assert marks == {"1": [("section", "Chorus")], "2": [],            # the first tempo is in the header
+                     "3": [("tempo", "\uECA5 = 75"), ("section", "Verse")], "4": [], "5": [("tempo", "\uECA5 = 80")]}
     assert [len(m.findall(f".//{MEI}note")) for m in root.iter(f"{MEI}measure")] == [2, 2, 4, 4, 4]
     assert _text(next(r for r in root.iter(f"{MEI}rend") if r.get("type") == "tempo")) == "\uECA5\uECB7 = 50"
 

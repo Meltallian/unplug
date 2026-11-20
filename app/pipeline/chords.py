@@ -39,7 +39,7 @@ class Params:
 
 
 PARAMS = Params()
-VERSION = "btc-3"
+VERSION = "btc-4"
 
 # The decoder first chooses among the 24 major and minor chords; every richer chord of the model
 # counts towards the plain chord a guitarist would strum instead. A sus chord has no third, so it

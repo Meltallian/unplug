@@ -36,20 +36,29 @@ def test_no_downbeats_still_gives_a_grid():
 
 
 def test_chord_change_snaps_to_the_bar_line():
-    from app.pipeline.chords import decode
-    c, am, mix = np.zeros(12), np.zeros(12), np.zeros(12)
-    c[[0, 4, 7]] = 1.0
-    am[[9, 0, 4]] = 1.0
-    mix[[0, 4, 7, 9]] = 1.0                         # ambiguous beat: C and Am equally likely
-    cols = [c] * 4 + [mix] + [am] * 7               # bar lines at beats 0, 4, 8
-    chroma = np.array(cols).T
-    n = chroma.shape[1]
-    feats = {"chroma": chroma, "bass": np.ones((12, n)), "rms": np.ones(n), "times": np.arange(n + 1.0),
-             "pos": np.arange(n) % 4, "meter": np.array(4), "tuning": np.array(0.0), "tempo": np.array(120.0)}
-    result = decode(feats)
-    names = [(s["name"], s["start"], s["on_bar"]) for s in result["segments"]]
-    assert names == [("C", 0.0, True), ("Am", 4.0, True)]
-    assert result["downbeats"] == [0.0, 4.0, 8.0] and result["meter"] == 4
+    from app.pipeline import btc
+    from app.pipeline.chords import decode_beats
+    n = 12                                          # bar lines at beats 0, 4, 8
+    probs = np.full((n, btc.N_CHORDS), 1e-4)
+    c, am = btc.chord_index(0, "maj"), btc.chord_index(9, "min")
+    probs[:4, c] = 0.9
+    probs[4, [c, am]] = 0.45                        # ambiguous beat: C and Am equally likely
+    probs[5:, am] = 0.9
+    segments, _ = decode_beats(probs, np.ones(n), np.arange(n + 1.0), np.arange(n) % 4, 4)
+    assert [(s["chord"], s["start"], s["on_bar"]) for s in segments] == [((0, "maj"), 0.0, True), ((9, "min"), 4.0, True)]
+
+
+def test_late_chord_change_is_pulled_back_to_the_bar_line():
+    from app.pipeline import btc
+    from app.pipeline.chords import decode_beats
+    n = 12
+    probs = np.full((n, btc.N_CHORDS), 1e-4)
+    c, am = btc.chord_index(0, "maj"), btc.chord_index(9, "min")
+    probs[:5, c] = 0.8                              # the model hears C one beat into the second bar
+    probs[:5, am] = 0.1
+    probs[5:, am] = 0.9
+    segments, _ = decode_beats(probs, np.ones(n), np.arange(n + 1.0), np.arange(n) % 4, 4)
+    assert [(s["chord"], s["start"]) for s in segments] == [((0, "maj"), 0.0), ((9, "min"), 4.0)]
 
 
 def test_random_downbeats_stay_four_four():

@@ -1,5 +1,9 @@
-"""Stages 3-4: tuning, beats + bar grid, chroma (+ bass chroma), key-aware template matching,
-HMM smoothing in which chords change on the "1" of a bar, less often mid-bar, rarely elsewhere.
+"""Stages 3-4: beats and bars, chord probabilities, and the decoding that joins them.
+
+The chord model (btc.py) says, frame by frame, how likely each of 170 chords is. The beat tracker
+(rhythm.py) says where the beats and the bars are. decode() joins the two: one chord per beat,
+chosen so that chords change on the "1" of a bar, less often mid-bar, rarely elsewhere. It first
+decides root and major/minor, then says more (7, m7, sus4, ...) only where the model is sure.
 
 Two parts so methods can be compared quickly:
   features()  slow, cached in cache/features-<FEATURES_VERSION>.npz
@@ -15,11 +19,11 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from app.pipeline import rhythm
 from app.music import ALL_CHORDS, chord_name, choose_capo, diatonic, estimate_key, key_name, triad_pcs
+from app.pipeline import btc, rhythm
 
-FEATURES_VERSION = "f4"
-HOP = 512
+FEATURES_VERSION = "f5"
+RMS_HOP = 512
 
 
 @dataclass(frozen=True)
@@ -28,82 +32,75 @@ class Params:
     change_half: float = 0.05       # ... in the middle of a 4/4 or 6/8 bar
     change_off: float = 0.001       # ... on any other beat
     out_of_key_prior: float = 0.25  # relative prior weight for chords outside the detected key
-    sharpness: float = 12.0         # softmax temperature on template similarity
+    sharpness: float = 1.0          # exponent on the chord model's probabilities
     silence_ratio: float = 0.08     # beats quieter than this × median RMS become N.C.
-    bass_weight: float = 0.5        # how much the bass note pulls towards chords with that root
-    third_weight: float = 0.8       # template weight of the third (root = 1)
-    fifth_weight: float = 0.8       # template weight of the fifth
+    quality_share: float = 0.5      # write G7, Am7, Dsus4 ... when the model gives that reading at
+                                    # least this share among the chords of the same root and family
 
 
 PARAMS = Params()
-VERSION = "bars-2"
+VERSION = "btc-1"
+
+# The decoder first chooses among the 24 major and minor chords; every richer chord of the model
+# counts towards the plain chord a guitarist would strum instead.
+_FAMILY = {"maj": ("maj", "maj6", "maj7", "7", "sus2", "sus4", "aug"),
+           "min": ("min", "min6", "min7", "minmaj7", "dim", "dim7", "hdim7")}
+# ... and these are written out when the model is sure of them (sixths stay plain chords)
+_WRITTEN = ("7", "maj7", "min7", "sus4", "sus2", "dim", "dim7", "hdim7", "aug")
 
 
-def _templates(p: Params) -> np.ndarray:
-    t = np.zeros((len(ALL_CHORDS), 12))
-    for i, chord in enumerate(ALL_CHORDS):
-        root, third, fifth = triad_pcs(chord)
-        t[i, [root, third, fifth]] = [1.0, p.third_weight, p.fifth_weight]
-    return t / np.linalg.norm(t, axis=1, keepdims=True)
+def _family_matrix() -> np.ndarray:
+    """(24 × 170): which model chords count towards each major/minor chord."""
+    m = np.zeros((len(ALL_CHORDS), btc.N_CHORDS))
+    for i, (root, quality) in enumerate(ALL_CHORDS):
+        for q in _FAMILY[quality]:
+            m[i, btc.chord_index(root, q)] = 1.0
+    return m
 
 
 def features(wav: Path) -> dict:
-    """Beat-synchronous chroma, bass chroma and loudness. Cached next to the wav."""
+    """Chord probabilities, beat activations and loudness of a song. Cached next to the wav."""
     cache = wav.parent / f"features-{FEATURES_VERSION}.npz"
     if cache.exists():
         try:
             with np.load(cache) as z:
-                feats = {k: z[k] for k in z.files}
-            if {"chroma", "bass", "rms", "times", "pos", "meter", "tuning", "tempo"} <= feats.keys():
+                feats = {k: z[k].astype(np.float32) if z[k].dtype == np.float16 else z[k] for k in z.files}
+            if {"probs", "rms", "beat_act", "down_act", "tuning", "duration"} <= feats.keys():
                 return feats
         except Exception:  # corrupt or partial cache (e.g. BadZipFile): recompute
             pass
 
     y, sr = librosa.load(wav, sr=None, mono=True)
-    tuning = float(librosa.estimate_tuning(y=y, sr=sr))  # fraction of a semitone
-    y_harm = librosa.effects.harmonic(y, margin=3.0)
-    chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr, hop_length=HOP, tuning=tuning, bins_per_octave=36)
-    # Bass: E1 (41 Hz) to E3 (165 Hz) — bass guitar and the low guitar strings
-    bass_cqt = np.abs(librosa.cqt(y_harm, sr=sr, hop_length=HOP, fmin=librosa.note_to_hz("E1"),
-                                  n_bins=72, bins_per_octave=36, tuning=tuning))
-    bass = librosa.feature.chroma_cqt(C=bass_cqt, sr=sr, hop_length=HOP, bins_per_octave=36,
-                                      fmin=librosa.note_to_hz("E1"))
-    n = min(chroma.shape[1], bass.shape[1])
-    chroma, bass = chroma[:, :n], bass[:, :n]
-    rms = librosa.feature.rms(y=y, hop_length=HOP)[0][:n]
-
-    beat_times, downbeat_times = rhythm.track(y, sr)
-    meter, beat_pos = rhythm.fit_grid(beat_times, downbeat_times)
-    frames = librosa.time_to_frames(beat_times, sr=sr, hop_length=HOP)
-    keep = (frames > 0) & (frames < n) & np.concatenate([[True], np.diff(frames) > 0])
-    frames, beat_pos = frames[keep], beat_pos[keep]
-    bounds = np.concatenate([[0], frames, [n]])
-    # the stretch before the first beat has no bar position (-1)
-    pos = np.concatenate([[-1], beat_pos])
+    beat_act, down_act = rhythm.cached_activations(wav, y, sr)
     feats = {
-        "chroma": librosa.util.sync(chroma, bounds, aggregate=np.median),
-        "bass": librosa.util.sync(bass, bounds, aggregate=np.median),
-        "rms": librosa.util.sync(rms[np.newaxis, :], bounds, aggregate=np.mean)[0],
-        "times": librosa.frames_to_time(bounds, sr=sr, hop_length=HOP),
-        "pos": pos,
-        "meter": np.array(meter),
-        "tuning": np.array(tuning),
-        "tempo": np.array(rhythm.tempo(beat_times)),
+        "probs": btc.chord_probabilities(y, sr),
+        "rms": librosa.feature.rms(y=y, hop_length=RMS_HOP)[0],
+        "rms_step": np.array(RMS_HOP / sr),
+        "beat_act": beat_act,
+        "down_act": down_act,
+        "tuning": np.array(float(librosa.estimate_tuning(y=y, sr=sr))),  # fraction of a semitone
+        "duration": np.array(len(y) / sr),
     }
     tmp = cache.with_name(f"{cache.stem}.{os.getpid()}.tmp.npz")
     try:
-        np.savez_compressed(tmp, **feats)
+        np.savez_compressed(tmp, **{k: v.astype(np.float16) if k in ("probs", "beat_act", "down_act") else v
+                                    for k, v in feats.items()})
         tmp.replace(cache)
     finally:
         tmp.unlink(missing_ok=True)
     return feats
 
 
-def display_tempo(bpm: float) -> float:
-    """Beat trackers often lock onto double time; strummed songs rarely exceed ~135 bpm per beat."""
-    while 135 < bpm < 10_000:
-        bpm /= 2
-    return bpm
+def span_means(frames: np.ndarray, step: float, bounds: np.ndarray) -> np.ndarray:
+    """Mean of frame values (frames × ...) over each span between consecutive bounds (seconds);
+    frame i covers [i, i+1) × step. Frames cut by a bound count for the part inside."""
+    total = np.concatenate([np.zeros((1,) + frames.shape[1:]), np.cumsum(frames, axis=0, dtype=float)])
+    x = np.clip(np.asarray(bounds, dtype=float) / step, 0, len(frames))
+    i = np.minimum(x.astype(int), len(frames) - 1)
+    frac = (x - i).reshape((-1,) + (1,) * (frames.ndim - 1))
+    at = total[i] + frac * frames[i]
+    width = np.maximum(np.diff(x), 1e-9).reshape((-1,) + (1,) * (frames.ndim - 1))
+    return (at[1:] - at[:-1]) / width
 
 
 def _change_prob(pos: np.ndarray, meter: int, p: Params) -> np.ndarray:
@@ -136,44 +133,79 @@ def _viterbi(log_lik: np.ndarray, change: np.ndarray) -> np.ndarray:
     return path
 
 
-def decode(feats: dict, p: Params = PARAMS) -> dict:
-    chroma, bass, rms, times = feats["chroma"], feats["bass"], feats["rms"], feats["times"]
+def _written_quality(chord: tuple, probs: np.ndarray, p: Params) -> str:
+    """"maj"/"min", or a richer reading of the same chord when the model is sure of it."""
+    root, quality = chord
+    family = {q: float(probs[btc.chord_index(root, q)]) for q in _FAMILY[quality]}
+    best = max(family, key=family.get)
+    if best in _WRITTEN and family[best] >= p.quality_share * (sum(family.values()) + 1e-12):
+        return best
+    return quality
 
+
+def decode_beats(probs: np.ndarray, rms: np.ndarray, times: np.ndarray, pos: np.ndarray, meter: int,
+                 p: Params = PARAMS) -> tuple[list[dict], tuple]:
+    """Chords from per-beat model probabilities (beats × 170), loudness, the beat bounds (beats + 1
+    times) and each beat's position in its bar. Returns (segments, key)."""
+    family = probs @ _family_matrix().T                                        # beats × 24
     weights = rms / (rms.sum() or 1.0)
-    key = estimate_key(chroma @ weights)
+    profile = np.zeros(12)
+    for i, chord in enumerate(ALL_CHORDS):
+        for k, pc in enumerate(triad_pcs(chord)):
+            profile[pc] += float(family[:, i] @ weights) * (1.5 if k == 0 else 1.0)
+    key = estimate_key(profile)
 
-    norm = chroma / (np.linalg.norm(chroma, axis=0, keepdims=True) + 1e-9)
-    sim = _templates(p) @ norm                                                   # 24 × n_beats
     prior = np.array([1.0 if c in diatonic(key) else p.out_of_key_prior for c in ALL_CHORDS])
-    lik = np.exp(p.sharpness * sim) * prior[:, None]
-    if p.bass_weight:
-        b = bass / (bass.max(axis=0, keepdims=True) + 1e-9)                     # 1 = strongest bass note
-        roots = np.array([c[0] for c in ALL_CHORDS])
-        lik *= (0.1 + b[roots, :]) ** p.bass_weight
+    lik = (family.T + 1e-6) ** p.sharpness * prior[:, None]                    # 24 × beats
     silent = rms < p.silence_ratio * np.median(rms)
-    n_row = np.where(silent, lik.max(axis=0) * 10, lik.min(axis=0) * 0.1)
-    lik = np.vstack([lik, n_row])
-    prob = lik / lik.sum(axis=0, keepdims=True)
+    none = (probs[:, btc.N_INDEX] + 1e-6) ** p.sharpness
+    lik = np.vstack([lik, np.where(silent, lik.max(axis=0) * 10, none)])
+    path = _viterbi(np.log(lik / lik.sum(axis=0, keepdims=True)), _change_prob(pos, meter, p))
 
-    pos = feats.get("pos", np.zeros(prob.shape[1], dtype=int))
-    meter = int(feats.get("meter", 4))
-    path = _viterbi(np.log(prob + 1e-12), _change_prob(pos, meter, p))
-    labels = [ALL_CHORDS[i] if i < len(ALL_CHORDS) else "N" for i in path]
     segments: list[dict] = []
-    for i, label in enumerate(labels):
-        if segments and segments[-1]["chord"] == label:
+    for i, state in enumerate(path):
+        if segments and segments[-1]["state"] == state:
             segments[-1]["end"] = float(times[i + 1])
             segments[-1]["beats"] += 1
+            segments[-1]["last"] = i
         else:
-            segments.append({"chord": label, "start": float(times[i]), "end": float(times[i + 1]), "beats": 1,
-                             "on_bar": bool(pos[i] <= 0)})
+            segments.append({"state": int(state), "start": float(times[i]), "end": float(times[i + 1]),
+                             "beats": 1, "on_bar": bool(pos[i] <= 0), "first": i, "last": i})
+    for s in segments:
+        state, first, last = s.pop("state"), s.pop("first"), s.pop("last")
+        if state == len(ALL_CHORDS):
+            s["chord"] = "N"
+        else:
+            root, quality = ALL_CHORDS[state]
+            span = probs[first:last + 1]
+            s["chord"] = (root, _written_quality((root, quality), span.T @ weights[first:last + 1], p))
+    return segments, key
+
+
+def display_tempo(bpm: float) -> float:
+    """Beat trackers often lock onto double time; strummed songs rarely exceed ~135 bpm per beat."""
+    while 135 < bpm < 10_000:
+        bpm /= 2
+    return bpm
+
+
+def decode(feats: dict, p: Params = PARAMS) -> dict:
+    duration = float(feats["duration"])
+    beats, downbeats = rhythm.pick(feats["beat_act"], feats["down_act"])
+    beats = beats[(beats > 0.05) & (beats < duration - 0.05)]
+    meter, beat_pos = rhythm.fit_grid(beats, downbeats)
+    times = np.concatenate([[0.0], beats, [duration]])
+    pos = np.concatenate([[-1], beat_pos])           # the stretch before the first beat has no bar position
+    probs = span_means(feats["probs"], btc.FRAME_S, times)
+    rms = span_means(feats["rms"], float(feats["rms_step"]), times)
+    segments, key = decode_beats(probs, rms, times, pos, meter, p)
 
     weighted = [(s["chord"], s["end"] - s["start"]) for s in segments if s["chord"] != "N"]
     return {
         "version": VERSION,
         "params": asdict(p),
         "tuning_semitones": round(float(feats["tuning"]), 3),
-        "tempo": display_tempo(float(feats["tempo"])),
+        "tempo": display_tempo(rhythm.tempo(beats)),
         "meter": meter,
         "downbeats": [round(float(t), 3) for t, q in zip(times, pos) if q == 0],
         "key": {"tonic": key[0], "mode": key[1], "name": key_name(key)},

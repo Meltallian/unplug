@@ -1,8 +1,8 @@
 """Music theory helpers: chord names, keys, transposition and capo choice.
 
-A chord is a (root, quality) pair: root is a pitch class 0-11 (C=0), quality is
-"maj" or "min". Version 1 only knows major and minor triads; power chords and
-extensions are reduced to these.
+A chord is a (root, quality) pair: root is a pitch class 0-11 (C=0), quality is "maj", "min" or
+a richer chord of one of these two families ("7", "min7", "sus4", ... see QUALITY_SUFFIX).
+plain() reduces any chord to the major or minor chord a guitarist would strum instead.
 """
 
 import re
@@ -44,11 +44,23 @@ def parse_chord(token: str) -> Chord | None | str:
     return (root, "min" if is_minor else "maj")
 
 
+# How each quality is written after the root, and the family it belongs to.
+QUALITY_SUFFIX = {"maj": "", "min": "m", "7": "7", "maj7": "maj7", "min7": "m7", "sus4": "sus4", "sus2": "sus2",
+                  "dim": "dim", "dim7": "dim7", "hdim7": "m7b5", "aug": "aug", "maj6": "6", "min6": "m6",
+                  "minmaj7": "mMaj7"}
+_MINOR_FAMILY = {"min", "min7", "min6", "minmaj7", "dim", "dim7", "hdim7"}
+
+
+def plain(chord: Chord) -> Chord:
+    """The major or minor chord of the same root."""
+    return (chord[0], "min" if chord[1] in _MINOR_FAMILY else "maj")
+
+
 def chord_name(chord: Chord | str) -> str:
     if chord == "N":
         return "N.C."
     root, quality = chord
-    return NAMES[root] + ("m" if quality == "min" else "")
+    return NAMES[root] + QUALITY_SUFFIX.get(quality, "")
 
 
 def transpose(chord: Chord | str, semitones: int) -> Chord | str:
@@ -58,7 +70,7 @@ def transpose(chord: Chord | str, semitones: int) -> Chord | str:
 
 
 def triad_pcs(chord: Chord) -> tuple[int, int, int]:
-    root, quality = chord
+    root, quality = plain(chord)
     third = 3 if quality == "min" else 4
     return (root, (root + third) % 12, (root + 7) % 12)
 
@@ -123,8 +135,12 @@ _SHAPE_COST = {
 }
 
 
+# Richer chords that are easier (or harder) than their plain chord in open position.
+_SHAPE_COST.update({(5, "maj7"): 0.0, (11, "7"): 0.2, (11, "min7"): 0.3, (6, "min7"): 0.6})
+
+
 def shape_cost(chord: Chord) -> float:
-    return _SHAPE_COST.get(chord, 1.0)
+    return _SHAPE_COST.get(chord, _SHAPE_COST.get(plain(chord), 1.0))
 
 
 # A capo must save real effort: each fret costs as much as 6% of the song on a hard shape.

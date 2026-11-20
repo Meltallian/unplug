@@ -23,22 +23,59 @@ METERS = (4, 3, 6)    # 4 first: the default
 METER_MARGIN = 0.05
 
 
+FPS = 50                 # frames per second of the tracker's activations
+ACTIVATIONS_VERSION = "a1"
+
+
 @lru_cache(maxsize=1)
-def _tracker():
+def _network():
     import torch
-    from beat_this.inference import Audio2Beats
+    from beat_this.inference import Audio2Frames
 
     torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))  # two songs may run at once
-    return Audio2Beats(checkpoint_path=CHECKPOINT, device="cpu", dbn=False)
+    return Audio2Frames(checkpoint_path=CHECKPOINT, device="cpu")
 
 
-def track(y: np.ndarray, sr: int) -> tuple[np.ndarray, np.ndarray]:
-    """Beat and downbeat times in seconds."""
-    beats, downs = _tracker()(y.astype(np.float32), sr)
+def activations(y: np.ndarray, sr: int) -> tuple[np.ndarray, np.ndarray]:
+    """Beat and downbeat activations (logits, FPS frames per second): the slow part of tracking."""
+    beat, down = _network()(y.astype(np.float32), sr)
+    return beat.numpy().astype(np.float32), down.numpy().astype(np.float32)
+
+
+def pick(beat_act: np.ndarray, down_act: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Beat and downbeat times in seconds from the activations (peaks above 50 %)."""
+    import torch
+    from beat_this.model.postprocessor import Postprocessor
+
+    beats, downs = Postprocessor(type="minimal", fps=FPS)(torch.from_numpy(beat_act), torch.from_numpy(down_act))
     beats = np.asarray(beats, dtype=float)
     if len(beats):
         beats = beats[np.concatenate([[True], np.diff(beats) > MIN_GAP])]
     return beats, np.asarray(downs, dtype=float)
+
+
+def track(y: np.ndarray, sr: int) -> tuple[np.ndarray, np.ndarray]:
+    """Beat and downbeat times in seconds."""
+    return pick(*activations(y, sr))
+
+
+def cached_activations(wav, y: np.ndarray, sr: int) -> tuple[np.ndarray, np.ndarray]:
+    """activations(), kept next to the wav so that later stages and experiments never re-run the network."""
+    cache = wav.parent / f"beat-activations-{ACTIVATIONS_VERSION}.npz"
+    if cache.exists():
+        try:
+            with np.load(cache) as z:
+                return z["beat"].astype(np.float32), z["downbeat"].astype(np.float32)
+        except Exception:  # corrupt or partial cache: recompute
+            pass
+    beat, down = activations(y, sr)
+    tmp = cache.with_name(f"{cache.stem}.{os.getpid()}.tmp.npz")
+    try:
+        np.savez_compressed(tmp, beat=beat.astype(np.float16), downbeat=down.astype(np.float16))
+        tmp.replace(cache)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return beat, down
 
 
 def _fit(near: np.ndarray, meter: int) -> tuple[float, np.ndarray]:

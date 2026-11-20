@@ -149,3 +149,20 @@ def test_chords_shorter_than_a_counted_beat_join_the_chord_before():
     out = merge_short(segments, np.full(18, 3))                # 6/8: three eighth notes to the beat
     assert [(s["chord"], s["start"], s["end"], s["beats"]) for s in out] == [((0, "maj"), 0.0, 12.0, 12), ((9, "min"), 12.0, 18.0, 6)]
     assert len(merge_short(segments, np.ones(18))) == 4        # plain 4/4: every beat counts
+
+
+def test_every_chord_diagram_sounds_its_chord():
+    """Each shape, fret by fret in standard tuning: only notes of the chord, with the root in the bass."""
+    import re
+    from app.music import SHAPES, diagram_svg, pc, shape_key
+    tuning = [4, 9, 2, 7, 11, 4]
+    tones = {"": {0, 4, 7}, "m": {0, 3, 7}, "7": {0, 4, 7, 10}, "m7": {0, 3, 7, 10}, "maj7": {0, 4, 7, 11},
+             "sus4": {0, 5, 7}, "sus2": {0, 2, 7}, "m7b5": {0, 3, 6, 10}}
+    for name, frets in SHAPES.items():
+        root, suffix = re.match(r"^([A-G][#b]?)(.*)$", name).groups()
+        wanted = {(pc(root) + i) % 12 for i in tones[suffix]}
+        sounded = [(tuning[i] + int(f)) % 12 for i, f in enumerate(frets) if f != "x"]
+        assert set(sounded) <= wanted and len(set(sounded)) >= 3 and sounded[0] == pc(root), name
+        assert diagram_svg(name).startswith("<svg")
+    assert shape_key("Em7") == "Em7" and shape_key("Dsus4") == "Dsus4" and shape_key("Gadd9") == "G"
+    assert shape_key("Bbm7") == "Bbm" and shape_key("N.C.") is None

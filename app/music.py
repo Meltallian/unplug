@@ -158,12 +158,19 @@ def choose_capo(chords: list[tuple[Chord, float]], max_capo: int = 7) -> int:
 # --- chord names as written on charts (with any suffix) ---------------------------------------
 _NAME = re.compile(r"^([A-G])([#b]?)(.*?)(?:/([A-G])([#b]?))?$")
 
-# Same shapes as the chart page (static/chart.js), low E to high e.
+# Same shapes as the chart page (static/chart.js), low E (left) to high e; x = not played.
 SHAPES = {
     "C": "x32010", "C#": "x46664", "D": "xx0232", "Eb": "x68886", "E": "022100", "F": "133211",
     "F#": "244322", "G": "320003", "Ab": "466544", "A": "x02220", "Bb": "x13331", "B": "x24442",
     "Cm": "x35543", "C#m": "x46654", "Dm": "xx0231", "Ebm": "x68876", "Em": "022000", "Fm": "133111",
     "F#m": "244222", "Gm": "355333", "Abm": "466444", "Am": "x02210", "Bbm": "x13321", "Bm": "x24432",
+    # richer chords with a common open (or easy) shape of their own
+    "A7": "x02020", "B7": "x21202", "C7": "x32310", "D7": "xx0212", "E7": "020100", "G7": "320001",
+    "F#7": "242322", "Am7": "x02010", "Bm7": "x20202", "Dm7": "xx0211", "Em7": "022030", "F#m7": "242222",
+    "C#m7": "x46454", "Cmaj7": "x32000", "Dmaj7": "xx0222", "Emaj7": "021100", "Fmaj7": "xx3210",
+    "Gmaj7": "320002", "Amaj7": "x02120", "Asus4": "x02230", "Dsus4": "xx0233", "Esus4": "022200",
+    "Gsus4": "330013", "Csus4": "x33011", "Asus2": "x02200", "Dsus2": "xx0230", "Esus2": "024400",
+    "Csus2": "x30013", "Gsus2": "300033", "Fsus2": "xx3011", "Bm7b5": "x2323x", "F#m7b5": "2x221x",
 }
 
 
@@ -178,11 +185,16 @@ def move_chord_name(name: str, semitones: int) -> str:
 
 
 def shape_key(name: str) -> str | None:
+    """The diagram to show for a written chord: its own if we have one (Em7, Dsus4, B7 ...),
+    else the plain major or minor chord of its root (Bbm7 -> Bbm). None if it is no chord."""
     m = _NAME.match(name.strip())
     if not m:
         return None
+    root = NAMES[pc(m.group(1) + m.group(2))]
+    if root + m.group(3) in SHAPES:
+        return root + m.group(3)
     minor = re.match(r"^(m(?!aj)|min|-)", m.group(3)) is not None
-    return NAMES[pc(m.group(1) + m.group(2))] + ("m" if minor else "")
+    return root + ("m" if minor else "")
 
 
 def diagram_svg(key: str) -> str:

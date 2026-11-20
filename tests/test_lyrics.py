@@ -30,3 +30,52 @@ def test_music_stretches_join_neighbouring_chords_and_skip_no_chord():
                              {"chord": [0, "maj"], "start": 20.0, "end": 24.0}]}
     assert music_stretches(analysis) == [(5.0, 12.0), (20.0, 24.0)]
     assert music_stretches(None) is None and music_stretches({"segments": []}) is None
+
+
+def _recording(seconds: int, seed: int = 0, step: float = 0.1) -> np.ndarray:
+    """A made-up recording: a new chord (one of 24) every 2 s, as (frames × 25) probabilities."""
+    rng = np.random.default_rng(seed)
+    chords = rng.integers(0, 24, size=seconds // 2 + 1)
+    frames = np.full((int(seconds / step), 25), 0.01)
+    for i in range(len(frames)):
+        frames[i, chords[int(i * step / 2)]] = 0.9
+    return frames
+
+
+def test_reference_recording_is_found_in_a_video_with_an_intro_and_an_inserted_scene():
+    from app.pipeline.lyrics import match_recordings, shift_at
+    step = 0.1
+    album = _recording(200)
+    cut = int(120 / step)                                       # the video: 9 s of intro, the album up to 120 s,
+    video = np.vstack([np.full((90, 25), 0.04), album[:cut],    # 4 s of something else, then the rest
+                       np.full((40, 25), 0.04), album[cut:], np.full((100, 25), 0.04)])
+    shifts = match_recordings(album, video, step, lo=-3.0, hi=26.0)
+    assert shifts is not None
+    assert abs(shift_at(shifts, 30.0) - 9.0) < 0.2 and abs(shift_at(shifts, 100.0) - 9.0) < 0.2
+    assert abs(shift_at(shifts, 150.0) - 13.0) < 0.2 and abs(shift_at(shifts, 190.0) - 13.0) < 0.2
+
+
+def test_another_recording_is_not_taken_for_the_reference():
+    from app.pipeline.lyrics import match_recordings
+    assert match_recordings(_recording(200, seed=1), _recording(220, seed=2), 0.1, lo=-3.0, hi=23.0) is None
+
+
+def test_lines_are_placed_by_the_reference_and_fall_back_to_activity(tmp_path, monkeypatch):
+    from app.pipeline import lyrics
+    lines = [{"t": 10.0, "text": "one"}, {"t": 150.0, "text": "two"}]
+    meta, match = {"duration": 220, "youtube_id": "v"}, {"duration": 200.0, "artistName": "A", "trackName": "B"}
+    monkeypatch.setattr(lyrics, "reference_shifts", lambda *a: [(15.0, 9.0), (145.0, 13.0)])
+    placed = lyrics.place(lines, tmp_path, tmp_path / "a.wav", meta, match, None)
+    assert placed["aligned"] == "reference" and placed["offset"] == 0.0
+    assert placed["lines"] == [{"t": 19.0, "lrc_t": 10.0, "text": "one"}, {"t": 163.0, "lrc_t": 150.0, "text": "two"}]
+    # placing again starts from the LRCLIB times, not from the placed ones
+    assert lyrics.place(placed["lines"], tmp_path, tmp_path / "a.wav", meta, match, None)["lines"] == placed["lines"]
+
+    def no_reference(*a):
+        raise RuntimeError("no network")
+    monkeypatch.setattr(lyrics, "reference_shifts", no_reference)
+    monkeypatch.setattr(lyrics, "vocal_activity", lambda wav: (np.zeros(2200), 0.1))
+    fallback = lyrics.place(placed["lines"], tmp_path, tmp_path / "a.wav", meta, match, None)
+    assert fallback["aligned"] == "activity" and [ln["t"] for ln in fallback["lines"]] == [10.0, 150.0]
+    same = lyrics.place(lines, tmp_path, tmp_path / "a.wav", {"duration": 201}, match, None)
+    assert same == {"lines": lines, "offset": 0.0, "aligned": "same"}

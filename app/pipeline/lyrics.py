@@ -1,8 +1,19 @@
-"""Stage 6: lyrics from LRCLIB (synced if possible), with a global timing offset for the video.
+"""Stage 6: lyrics from LRCLIB (synced if possible), placed on the video's timeline.
+
+LRCLIB times belong to the recording the lyrics were timed on, usually the album track. A video
+often adds an intro, an outro or a scene. Two ways to find where each line is sung in the video:
+
+1. Reference recording (preferred): the album track is looked up on YouTube by its exact length,
+   and the two recordings are matched by their chords, window by window. Exact to a fraction of
+   a second, and it follows a scene inserted in the middle.
+2. Vocal activity (fallback): one shift for the whole song, the one that puts sung lines on
+   activity in the vocal band, among those that keep every line on music.
 
 Writes lyrics.json:
   {"source": "lrclib"|"pasted"|"none", "synced": bool, "lines": [{"t": float|None, "text": str}],
-   "offset": float, "match": {...}}
+   "offset": float, "match": {...}, "aligned": "reference"|"activity"|"same"}
+With "reference" the line times are already video times (the LRCLIB time is kept as "lrc_t")
+and "offset" is 0.
 """
 
 import json
@@ -19,7 +30,11 @@ _NOISE = re.compile(
     re.I)
 _VARIANTS = ("unplugged", "acoustic", "live", "remix", "demo", "piano", "orchestral")
 SAME_LENGTH = 3.0  # seconds; lyrics this close in length to the video need no offset
-OFFSET_VERSION = 2  # bump when estimate_offset changes: cached lyrics get their offset recomputed
+OFFSET_VERSION = 3  # bump when the placement changes: cached lyrics are placed again
+REFERENCE_TOL = 2.0  # seconds; the reference recording must be this close in length to the lyrics' own
+WINDOW_S, HOP_S = 30.0, 10.0   # the recordings are matched in windows of this length, this far apart
+MIN_MATCH = 0.6     # mean chord agreement (0..1) a window needs to count as found in the video
+MIN_FOUND = 0.5     # share of windows that must be found for the reference to be trusted
 LINE_WINDOW = 2.0  # seconds of music a sung line needs under its start
 _LRC_LINE = re.compile(r"^\[(\d+):(\d+(?:\.\d+)?)\](.*)$")
 
@@ -170,6 +185,91 @@ def estimate_offset(lines: list[dict], activity: np.ndarray, hop_s: float,
     return round(float(best), 2)
 
 
+def find_reference(artist: str, track: str, lyrics_duration: float, exclude_id: str) -> str | None:
+    """YouTube id of the recording the lyrics were timed on: an upload of exactly its length."""
+    import yt_dlp
+
+    search = yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "extract_flat": True, "noplaylist": True})
+    for query in (f"{artist} {track} topic", f"{artist} {track}"):       # "topic": the label's audio upload
+        found = search.extract_info(f"ytsearch8:{query}", download=False).get("entries") or []
+        for entry in found:
+            if entry.get("id") != exclude_id and entry.get("duration") \
+                    and abs(entry["duration"] - lyrics_duration) <= REFERENCE_TOL:
+                return entry["id"]
+    return None
+
+
+def match_recordings(reference: np.ndarray, video: np.ndarray, step: float, lo: float, hi: float) -> list[tuple[float, float]] | None:
+    """Where each part of the reference recording is in the video.
+
+    Both are (frames × chords) probabilities, `step` seconds per frame. Returns [(reference time,
+    shift)]: a window of the reference centred on that time is found `shift` seconds later in the
+    video (lo <= shift <= hi). None if too few windows are found (not the same recording)."""
+    def unit(m: np.ndarray) -> np.ndarray:
+        return m / (np.linalg.norm(m, axis=1, keepdims=True) + 1e-9)
+
+    ref, vid = unit(reference), unit(video)
+    lags = np.arange(int(np.floor(lo / step)), int(np.ceil(hi / step)) + 1)
+    window, hop = int(WINDOW_S / step), int(HOP_S / step)
+    out, found = [], 0
+    for start in range(0, max(1, len(ref) - window + 1), hop):
+        part = ref[start:start + window]
+        best_lag, best = None, -1.0
+        for lag in lags:
+            a = start + lag
+            if a < 0 or a + len(part) > len(vid):
+                continue
+            agreement = float(np.mean(np.sum(part * vid[a:a + len(part)], axis=1)))
+            if agreement > best:
+                best_lag, best = lag, agreement
+        centre = (start + len(part) / 2) * step
+        ok = best_lag is not None and best >= MIN_MATCH
+        found += ok
+        out.append((centre, best_lag * step if ok else None))
+    if not out or found < MIN_FOUND * len(out):
+        return None
+    known = [(t, shift) for t, shift in out if shift is not None]      # windows not found take their neighbour's shift
+    filled = [(t, shift if shift is not None else min(known, key=lambda k: abs(k[0] - t))[1]) for t, shift in out]
+    shifts = [s for _, s in filled]
+    smooth = [float(np.median(shifts[max(0, i - 1):i + 2])) for i in range(len(shifts))]   # one odd window is noise
+    return [(t, round(s, 2)) for (t, _), s in zip(filled, smooth)]
+
+
+def shift_at(shifts: list[tuple[float, float]], t: float) -> float:
+    """The shift of the window nearest to reference time t."""
+    return min(shifts, key=lambda k: abs(k[0] - t))[1]
+
+
+def reference_shifts(song_dir: Path, wav: Path, meta: dict, match: dict, cookies_file: Path | None) -> list[tuple[float, float]] | None:
+    """match_recordings() between the recording the lyrics were timed on and this video; None
+    when that recording is not found or does not match. Its audio is not kept."""
+    import shutil
+
+    import librosa
+
+    from app.pipeline import btc, chords
+    from app.pipeline.audio import decode
+    from app.pipeline.download import download
+
+    artist, track = match.get("artistName") or "", match.get("trackName") or ""
+    duration, video_duration = match.get("duration"), meta.get("duration") or 0
+    if not (artist and track and duration):
+        return None
+    ref_id = find_reference(artist, track, duration, meta.get("youtube_id", ""))
+    if not ref_id:
+        return None
+    ref_dir = song_dir / "cache" / "reference"
+    try:
+        download(ref_id, ref_dir, cookies_file)
+        y, sr = librosa.load(decode(ref_dir), sr=None, mono=True)
+        reference = chords.plain_probabilities(btc.chord_probabilities(y, sr))
+    finally:
+        shutil.rmtree(ref_dir, ignore_errors=True)
+    video = chords.plain_probabilities(chords.features(wav)["probs"])
+    diff = video_duration - duration
+    return match_recordings(reference, video, btc.FRAME_S, min(0.0, diff) - 3.0, max(0.0, diff) + 3.0)
+
+
 def music_stretches(analysis: dict | None) -> list[tuple[float, float]] | None:
     """Where the chord stage found chords: [(start, end)], neighbours joined."""
     if not analysis:
@@ -185,16 +285,30 @@ def music_stretches(analysis: dict | None) -> list[tuple[float, float]] | None:
     return [(a, b) for a, b in out] or None
 
 
-def _offset(lines: list[dict], wav: Path, meta: dict, match: dict, analysis: dict | None) -> float:
+def place(lines: list[dict], song_dir: Path, wav: Path, meta: dict, match: dict, analysis: dict | None,
+          cookies_file: Path | None = None) -> dict:
+    """Put synced lines on the video's timeline: {"lines", "offset", "aligned"} (see the module docstring)."""
+    lines = [{"t": ln.get("lrc_t", ln["t"]), "text": ln["text"]} for ln in lines]       # back to LRCLIB times
+    video_duration, duration = meta.get("duration") or 0, match.get("duration")
+    if not duration or abs(video_duration - duration) <= SAME_LENGTH:
+        return {"lines": lines, "offset": 0.0, "aligned": "same"}   # same length: almost surely the same audio
+    try:
+        shifts = reference_shifts(song_dir, wav, meta, match, cookies_file)
+    except Exception:      # lyrics are optional: no network, no such upload, a failed download ...
+        shifts = None
+    if shifts:
+        placed = [{"t": round(ln["t"] + shift_at(shifts, ln["t"]), 2), "lrc_t": ln["t"], "text": ln["text"]} for ln in lines]
+        return {"lines": placed, "offset": 0.0, "aligned": "reference"}
     try:
         act, hop_s = vocal_activity(wav)
-        return estimate_offset(lines, act, hop_s, meta.get("duration") or 0, match.get("duration"),
-                               music_stretches(analysis))
+        offset = estimate_offset(lines, act, hop_s, video_duration, duration, music_stretches(analysis))
     except Exception:
-        return 0.0
+        offset = 0.0
+    return {"lines": lines, "offset": offset, "aligned": "activity"}
 
 
-def fetch_lyrics(song_dir: Path, wav: Path, meta: dict, analysis: dict | None = None) -> dict:
+def fetch_lyrics(song_dir: Path, wav: Path, meta: dict, analysis: dict | None = None,
+                 cookies_file: Path | None = None) -> dict:
     """Lyrics for a song (cached). `analysis`: the chord stage's result, used to place the lyrics."""
     out = song_dir / "cache" / "lyrics.json"
     if out.exists():
@@ -202,7 +316,7 @@ def fetch_lyrics(song_dir: Path, wav: Path, meta: dict, analysis: dict | None = 
             cached = json.loads(out.read_text())
             if cached.get("source") == "lrclib" and cached.get("synced") and cached.get("match") \
                     and cached.get("offset_version") != OFFSET_VERSION:
-                cached["offset"] = _offset(cached["lines"], wav, meta, cached["match"], analysis)
+                cached.update(place(cached["lines"], song_dir, wav, meta, cached["match"], analysis, cookies_file))
                 cached["offset_version"] = OFFSET_VERSION
                 save_lyrics(out, cached)
             if cached.get("source") != "none":
@@ -219,11 +333,13 @@ def fetch_lyrics(song_dir: Path, wav: Path, meta: dict, analysis: dict | None = 
         match = None
     if match:
         synced = bool(match.get("syncedLyrics"))
-        lines = parse_lrc(match["syncedLyrics"]) if synced else plain_lines(match.get("plainLyrics") or "")
-        offset = _offset(lines, wav, meta, match, analysis) if synced else 0.0
-        result = {"source": "lrclib", "synced": synced, "lines": lines, "offset": offset,
-                  "offset_version": OFFSET_VERSION, "query": [artist, track],
-                  "match": {k: match.get(k) for k in ("id", "artistName", "trackName", "albumName", "duration")}}
+        kept = {k: match.get(k) for k in ("id", "artistName", "trackName", "albumName", "duration")}
+        result = {"source": "lrclib", "synced": synced, "offset": 0.0, "offset_version": OFFSET_VERSION,
+                  "query": [artist, track], "match": kept}
+        if synced:
+            result.update(place(parse_lrc(match["syncedLyrics"]), song_dir, wav, meta, kept, analysis, cookies_file))
+        else:
+            result["lines"] = plain_lines(match.get("plainLyrics") or "")
     save_lyrics(out, result)
     return result
 

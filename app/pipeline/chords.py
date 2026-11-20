@@ -59,6 +59,11 @@ def _family_matrix() -> np.ndarray:
     return m
 
 
+def plain_probabilities(probs: np.ndarray) -> np.ndarray:
+    """(frames × 25): the model's probabilities summed into the 24 major and minor chords, plus "no chord"."""
+    return np.hstack([probs @ _family_matrix().T, probs[:, btc.N_INDEX:btc.N_INDEX + 1]])
+
+
 def features(wav: Path) -> dict:
     """Chord probabilities, beat activations and loudness of a song. Cached next to the wav."""
     cache = wav.parent / f"features-{FEATURES_VERSION}.npz"

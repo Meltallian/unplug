@@ -111,7 +111,7 @@ def process_song(song_id: int) -> None:
         wav = decode(song_dir)
         analysis = analyze(wav, song_dir / "cache" / "chords.json")
         _stage(song_id, "lyrics")
-        lyrics = fetch_lyrics(song_dir, wav, meta, analysis)
+        lyrics = fetch_lyrics(song_dir, wav, meta, analysis, settings.cookies_file)
         if (match := lyrics.get("match")) and " - " not in match["trackName"]:
             _set(song_id, title=match["trackName"], artist=match["artistName"])
         _stage(song_id, "chart")

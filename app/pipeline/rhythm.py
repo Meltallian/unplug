@@ -23,15 +23,17 @@ import numpy as np
 CHECKPOINT = os.environ.get("BEAT_THIS_CHECKPOINT", "final0")
 DOWNBEAT_TOL = 0.07   # s: a beat counts as a detected downbeat if one is this close
 SHORT_BAR_COST = 3.0  # cost of cutting a bar short (a missed beat, an odd bar)
-SWITCH_COST = 5.0     # cost of going from bars in threes to bars in fours or back (several bars of evidence)
+SWITCH_COST = 4.0     # cost of going from bars in threes to bars in fours or back (several bars of evidence)
 REGROUP_COST = 1.0    # cost of going from bars of 3 to bars of 6 or back (the same count, marked differently)
-# Cost per bar of each length, so that without clear downbeats a song is in four: a grid of threes
-# must earn its place, and a grid of sixes all the more (it has fewer "1"s to be wrong about).
-BAR_COST = {4: 0.0, 3: 0.15, 6: 0.6}
+# Cost per bar of each length, so that without clear downbeats a song is in four: a grid of
+# threes or sixes must earn its place.
+BAR_COST = {4: 0.0, 3: 0.15, 6: 0.3}
+DENSITY_WINDOW = 48   # beats over which the share of detected downbeats is measured
 MIN_GAP = 0.08        # s: beats closer than this are duplicates
 MIN_DOWNBEATS = 4     # with fewer detected downbeats than this the song is simply counted in four
+MIN_STRETCH = 24      # beats: a shorter stretch counted in threes among fours (or the reverse) is absorbed
 COMPOUND_BPM = 138.0  # beats in threes at least this fast are eighth notes of 6/8, slower ones a waltz
-HARMONY_WEIGHT = 0.0  # weight of "the chord changes here" when placing the "1" (a downbeat counts 1)
+HARMONY_WEIGHT = 1.0  # weight of "the chord changes here" when placing the "1" (a downbeat counts 1)
 PAIRING_WEIGHT = 1.0  # same, when pairing short bars into 6/8 or 4/4 bars (the downbeats often cannot tell)
 MAX_FILL = 16         # beats: longer holes in the beat track are left alone
 FILL_TOL = 0.12       # a hole is filled if its beats would be within this share of the local beat length
@@ -169,16 +171,23 @@ GROUPS = (4, 3, 6)   # beats per bar the grid may count; 4 first: the default
 
 def _fit(near: np.ndarray, bonus: np.ndarray, groups: tuple = GROUPS) -> tuple[np.ndarray, np.ndarray]:
     """Viterbi over (bars of 4 | 3 | 6 beats) × position in the bar. Score: +1 for a "1" on a
-    detected downbeat, -1 for a "1" without one or a detected downbeat elsewhere, plus `bonus` on
-    a "1". A bar may be cut short, and the bar length may change at a bar line, each at a cost
-    (small between 3 and 6, which are both counted in threes).
+    detected downbeat, -1 for a detected downbeat elsewhere, -miss for a "1" without one, plus
+    `bonus` on a "1". A bar may be cut short, and the bar length may change at a bar line, each
+    at a cost (small between 3 and 6, which are both counted in threes).
+
+    `miss` follows how many downbeats the tracker sees around there (2d/(1-d) for a share d of
+    beats): with that, downbeats scattered at random score the same for every bar length, so a
+    bar length wins on the pattern of the downbeats, not on how many "1"s it has to offer.
     Returns, for every beat, the length of its bar (4, 3 or 6) and its position in it."""
     n = len(near)
     offsets = np.concatenate([[0], np.cumsum(groups)])            # state index of each bar length's "1"
     k = int(offsets[-1])
+    window = np.ones(min(n, DENSITY_WINDOW))
+    density = np.convolve(near.astype(float), window, mode="same") / np.convolve(np.ones(n), window, mode="same")
+    miss = np.clip(2 * density / (1 - np.minimum(density, 0.9)), 0.2, 1.0)
     emit = np.tile(np.where(near, -1.0, 0.0)[:, None], (1, k))
     for g, o in zip(groups, offsets):
-        emit[:, o] = np.where(near, 1.0, -1.0) + bonus - BAR_COST[g]
+        emit[:, o] = np.where(near, 1.0, -miss) + bonus - BAR_COST[g]
     score = emit[0].copy()
     back = np.zeros((n, k), dtype=int)
     for i in range(1, n):
@@ -216,6 +225,12 @@ class Grid:
     def downbeats(self) -> np.ndarray:
         return self.beats[self.pos == 0]
 
+    @property
+    def unit(self) -> np.ndarray:
+        """Tracked beats per counted beat, for every beat: 3 in 6/8 (the dotted quarter), 2 in a 4/4
+        bar counted in eighth notes, else 1."""
+        return np.where(self.meter == 6, 3, np.where(self.meter == 4, self.size // 4, 1))
+
     def sections(self) -> list[dict]:
         """Stretches of bars in one time signature: [{"start": s, "meter": code, "tempo": bpm}].
         A stretch starts at a bar line (the first one starts with the song)."""
@@ -225,8 +240,7 @@ class Grid:
         for i in range(1, len(self.beats) + 1):
             if i == len(self.beats) or (self.pos[i] == 0 and (self.meter[i], self.size[i]) != (self.meter[start], self.size[start])):
                 beats, meter, size = self.beats[start:i + 1], int(self.meter[start]), int(self.size[start])
-                unit = 3 if meter == 6 else size // 4 if meter == 4 else 1       # tracked beats per notated beat
-                bpm = tempo(beats if len(beats) > 2 else self.beats) / unit
+                bpm = tempo(beats if len(beats) > 2 else self.beats) / int(self.unit[start])
                 if out and out[-1]["meter"] == meter and abs(out[-1]["tempo"] - bpm) < 0.02 * bpm:
                     pass                                                      # same signature and tempo: one stretch
                 else:
@@ -273,7 +287,15 @@ def bar_grid(beats: np.ndarray, downbeats: np.ndarray, novelty: np.ndarray | Non
         return Grid(beats, np.zeros(0, dtype=int), np.zeros(0, dtype=int), np.zeros(0, dtype=int))
     near = _near(beats, downbeats)
     groups = GROUPS if near.sum() >= MIN_DOWNBEATS else (4,)      # no downbeats to speak of: in four
-    group, pos = _fit(near, _harmony_bonus(novelty, HARMONY_WEIGHT, n), groups)
+    bonus = _harmony_bonus(novelty, HARMONY_WEIGHT, n)
+    group, pos = _fit(near, bonus, groups)
+    # A few bars in another count (often in a fade-out, where the tracker wavers) are no section:
+    # they are counted like the stretch before them (or after, at the very start).
+    edges = [0] + [i for i in range(1, n) if pos[i] == 0 and (group[i] == 4) != (group[i - 1] == 4)] + [n]
+    for j, (a, b) in enumerate(zip(edges, edges[1:])):
+        if b - a < MIN_STRETCH and len(edges) > 2:
+            like = group[a - 1] if j > 0 else group[b]
+            group[a:b], pos[a:b] = _fit(near[a:b], bonus[a:b], (4,) if like == 4 else (3, 6))
     fast = tempo(beats) >= COMPOUND_BPM
     compound = fast and bool(np.any(group != 4))        # the pulse is the eighth note of 6/8 somewhere
     evidence = near.astype(float) + _harmony_bonus(novelty, PAIRING_WEIGHT, n)

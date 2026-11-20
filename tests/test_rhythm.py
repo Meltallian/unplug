@@ -54,8 +54,8 @@ def test_late_chord_change_is_pulled_back_to_the_bar_line():
     n = 12
     probs = np.full((n, btc.N_CHORDS), 1e-4)
     c, am = btc.chord_index(0, "maj"), btc.chord_index(9, "min")
-    probs[:5, c] = 0.8                              # the model hears C one beat into the second bar
-    probs[:5, am] = 0.1
+    probs[:4, c] = 0.9
+    probs[4, c], probs[4, am] = 0.6, 0.3            # the model still leans to C one beat into the second bar
     probs[5:, am] = 0.9
     segments, _ = decode_beats(probs, np.ones(n), np.arange(n + 1.0), np.arange(n) % 4, 4)
     assert [(s["chord"], s["start"]) for s in segments] == [((0, "maj"), 0.0), ((9, "min"), 4.0)]

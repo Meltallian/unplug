@@ -8,6 +8,9 @@ Per song:
   root, majmin   share of time on the right chord root / right major-minor chord (mir_eval's
                  weighted chord symbol recall), after sliding the audio by `off` seconds
   7ths           same, counting sevenths (C7 is not C)
+  shift          semitones the estimate was moved to compare (0 normally; +1 or -1 for a record that
+                 sits a quarter tone off, where the nearest semitone is a toss-up; the score is then
+                 the better of the two readings)
   seg            do chord changes fall where the annotated ones do (1 = same segmentation)
   bars           estimated bar length / annotated bar length (1.00 = as many bars as the annotators)
   tempo          estimated / annotated tempo of the notated beat (quarter, or dotted quarter in 6/8)
@@ -141,7 +144,19 @@ def align(ref_iv, ref_lab, est_iv, est_lab) -> tuple[float, float]:
     return scale, k * STEP
 
 
-def score(analysis: dict, bb_dir: Path, alignment: tuple[float, float] | None = None) -> dict:
+def _moved(chord, semitones: int):
+    return chord if chord is None or chord == "N" or not semitones else [(chord[0] + semitones) % 12, *chord[1:]]
+
+
+def _agreement(ref_iv, ref_lab, est_iv, est_lab) -> float:
+    """Share of the annotated time on which both name the same major/minor chord."""
+    duration = float(ref_iv[-1, 1])
+    ref, est = _grid(ref_iv, ref_lab, duration), _grid(est_iv, est_lab, duration)
+    return float(np.mean((ref == est) & (ref >= 0)))
+
+
+def score(analysis: dict, bb_dir: Path, alignment: tuple[float, float, int] | None = None) -> dict:
+    """Scores of one analysis. `alignment` (scale, offset, semitone shift) to reuse one found before."""
     import mir_eval
 
     salami = parse_salami((bb_dir / "salami_chords.txt").read_text())
@@ -150,7 +165,17 @@ def score(analysis: dict, bb_dir: Path, alignment: tuple[float, float] | None = 
     segs = analysis["segments"]
     est_iv = np.array([[s["start"], s["end"]] for s in segs])
     est_lab = [harte(s["chord"]) for s in segs]
-    scale, offset = alignment or align(ref_iv, ref_lab, est_iv, est_lab)
+    semis = 0
+    if alignment is None:
+        candidates = []
+        for k in (0, 1, -1):                       # a quarter tone off: try the neighbouring semitones too
+            lab = [harte(_moved(s["chord"], k)) for s in segs]
+            sc, off = align(ref_iv, ref_lab, est_iv, lab)
+            candidates.append((_agreement(ref_iv, ref_lab, est_iv * sc + off, lab) - 0.02 * abs(k), k, sc, off))
+        _, semis, scale, offset = max(candidates)
+    else:
+        scale, offset, semis = alignment
+    est_lab = [harte(_moved(s["chord"], semis)) for s in segs]
     shifted = _contiguous(np.clip(est_iv * scale + offset, 0, None))
     keep = shifted[:, 1] > shifted[:, 0]
     res = mir_eval.chord.evaluate(ref_iv, ref_lab, shifted[keep], [l for l, k in zip(est_lab, keep) if k])
@@ -158,9 +183,10 @@ def score(analysis: dict, bb_dir: Path, alignment: tuple[float, float] | None = 
     if salami["tonic"] and analysis.get("key"):
         from app.music import pc
         tonic, est = pc(salami["tonic"]), analysis["key"]
-        relative = (est["tonic"] + (3 if est["mode"] == "minor" else 9)) % 12
-        key = "exact" if est["tonic"] == tonic else ("rel" if relative == tonic else "off")
-    row = {"off": round(offset, 2), "scale": round(scale, 4), "key": key, "root": res["root"], "majmin": res["majmin"], "7ths": res["sevenths"],
+        est_tonic = (est["tonic"] + semis) % 12
+        relative = (est_tonic + (3 if est["mode"] == "minor" else 9)) % 12
+        key = "exact" if est_tonic == tonic else ("rel" if relative == tonic else "off")
+    row = {"off": round(offset, 2), "scale": round(scale, 4), "shift": semis, "key": key, "root": res["root"], "majmin": res["majmin"], "7ths": res["sevenths"],
            "seg": res["seg"], "time": time_signature(analysis.get("meter", 4)), "ref_time": ref["metre"]}
     downs = np.asarray(analysis.get("downbeats") or [])
     if ref["bar"] and len(downs) > 2:

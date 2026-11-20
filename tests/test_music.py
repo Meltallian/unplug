@@ -126,3 +126,26 @@ def test_chord_names_of_richer_chords():
         ["E", "Em", "E7", "Em7", "Emaj7", "Esus4", "Em7b5"]
     assert plain((4, "min7")) == (4, "min") and plain((2, "sus4")) == (2, "maj")
     assert shape_cost((4, "min7")) == 0 and shape_cost((5, "maj7")) < shape_cost((5, "maj"))
+
+
+def test_one_spelling_per_chord_across_the_song():
+    from app.pipeline.chords import one_spelling
+    def seg(chord, seconds):
+        return {"chord": chord, "start": 0.0, "end": float(seconds)}
+    mostly_m7 = [seg((9, "min7"), 30), seg((9, "min"), 10), seg((7, "maj"), 20)]
+    one_spelling(mostly_m7)
+    assert [s["chord"] for s in mostly_m7] == [(9, "min7"), (9, "min7"), (7, "maj")]
+    mixed = [seg((2, "maj7"), 10), seg((2, "maj"), 10), seg((2, "7"), 5), seg("N", 3)]
+    one_spelling(mixed)
+    assert [s["chord"] for s in mixed] == [(2, "maj"), (2, "maj"), (2, "7"), "N"]     # D7 is another chord
+
+
+def test_chords_shorter_than_a_counted_beat_join_the_chord_before():
+    import numpy as np
+    from app.pipeline.chords import merge_short
+    def seg(chord, first, beats):
+        return {"chord": chord, "start": float(first), "end": float(first + beats), "beats": beats, "first": first}
+    segments = [seg((0, "maj"), 0, 6), seg((7, "maj"), 6, 2), seg((0, "maj"), 8, 4), seg((9, "min"), 12, 6)]
+    out = merge_short(segments, np.full(18, 3))                # 6/8: three eighth notes to the beat
+    assert [(s["chord"], s["start"], s["end"], s["beats"]) for s in out] == [((0, "maj"), 0.0, 12.0, 12), ((9, "min"), 12.0, 18.0, 6)]
+    assert len(merge_short(segments, np.ones(18))) == 4        # plain 4/4: every beat counts

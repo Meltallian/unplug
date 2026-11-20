@@ -32,7 +32,7 @@ class Params:
     change_half: float = 0.05       # ... in the middle of a 4/4 or 6/8 bar
     change_off: float = 0.001       # ... on any other beat
     out_of_key_prior: float = 0.25  # relative prior weight for chords outside the detected key
-    sharpness: float = 1.0          # exponent on the chord model's probabilities
+    sharpness: float = 3.0          # exponent on the chord model's probabilities (per beat)
     silence_ratio: float = 0.08     # beats quieter than this × median RMS become N.C.
     quality_share: float = 0.5      # write G7, Am7, Dsus4 ... when the model gives that reading at
                                     # least this share among the chords of the same root and family
@@ -145,11 +145,48 @@ def _written_quality(chord: tuple, probs: np.ndarray, p: Params) -> str:
     return quality
 
 
+# A guitarist plays one shape for "the A minor of this song": where the model writes Am7 here and
+# Am there, the song gets the one it mostly is (if clearly so), else the plain chord.
+_SAME_SHAPE = (("min", "min7"), ("maj", "maj7"))
+SAME_SHAPE_SHARE = 0.7
+
+
+def one_spelling(segments: list[dict]) -> None:
+    """Make each chord of a song one of (m, m7), and one of (plain, maj7), in place."""
+    for pair in _SAME_SHAPE:
+        seconds: dict[int, dict[str, float]] = {}
+        for s in segments:
+            if s["chord"] != "N" and s["chord"][1] in pair:
+                by_quality = seconds.setdefault(s["chord"][0], dict.fromkeys(pair, 0.0))
+                by_quality[s["chord"][1]] += s["end"] - s["start"]
+        for s in segments:
+            if s["chord"] != "N" and s["chord"][1] in pair:
+                by_quality = seconds[s["chord"][0]]
+                rich = by_quality[pair[1]] >= SAME_SHAPE_SHARE * sum(by_quality.values())
+                s["chord"] = (s["chord"][0], pair[1] if rich else pair[0])
+
+
+def merge_short(segments: list[dict], min_beats: np.ndarray) -> list[dict]:
+    """Chords shorter than one counted beat (min_beats[i] tracked beats at beat i: three eighth
+    notes in 6/8) join the chord before them; then equal neighbours are joined."""
+    out: list[dict] = []
+    for s in segments:
+        s = dict(s)
+        if out and s["chord"] != "N" and s["beats"] < min_beats[s["first"]] and out[-1]["chord"] != "N":
+            s["chord"] = out[-1]["chord"]
+        if out and out[-1]["chord"] == s["chord"]:
+            out[-1]["end"], out[-1]["beats"] = s["end"], out[-1]["beats"] + s["beats"]
+        else:
+            out.append(s)
+    return out
+
+
 def decode_beats(probs: np.ndarray, rms: np.ndarray, times: np.ndarray, pos: np.ndarray, size,
-                 p: Params = PARAMS) -> tuple[list[dict], tuple]:
+                 p: Params = PARAMS, min_beats: np.ndarray | None = None) -> tuple[list[dict], tuple]:
     """Chords from per-beat model probabilities (beats × 170), loudness, the beat bounds (beats + 1
     times), each beat's position in its bar and the number of beats of that bar (one number, or
-    one per beat). Returns (segments, key)."""
+    one per beat). `min_beats`: per beat, how many tracked beats make one counted beat there.
+    Returns (segments, key)."""
     family = probs @ _family_matrix().T                                        # beats × 24
     weights = rms / (rms.sum() or 1.0)
     profile = np.zeros(12)
@@ -175,19 +212,23 @@ def decode_beats(probs: np.ndarray, rms: np.ndarray, times: np.ndarray, pos: np.
             segments.append({"state": int(state), "start": float(times[i]), "end": float(times[i + 1]),
                              "beats": 1, "on_bar": bool(pos[i] <= 0), "first": i, "last": i})
     for s in segments:
-        state, first, last = s.pop("state"), s.pop("first"), s.pop("last")
+        state, first, last = s.pop("state"), s["first"], s.pop("last")
         if state == len(ALL_CHORDS):
             s["chord"] = "N"
         else:
             root, quality = ALL_CHORDS[state]
             span = probs[first:last + 1]
             s["chord"] = (root, _written_quality((root, quality), span.T @ weights[first:last + 1], p))
+    one_spelling(segments)
+    segments = merge_short(segments, np.ones(len(pos)) if min_beats is None else min_beats)
+    for s in segments:
+        del s["first"]
     return segments, key
 
 
-def novelty(probs: np.ndarray) -> np.ndarray:
+def novelty(probs: np.ndarray, sharpness: float = PARAMS.sharpness) -> np.ndarray:
     """How much the harmony moves on each beat (0 = same chord as the beat before, 1 = another one)."""
-    family = probs @ _family_matrix().T + 1e-9
+    family = (probs @ _family_matrix().T + 1e-9) ** sharpness
     family /= family.sum(axis=1, keepdims=True)
     same = np.sum(np.sqrt(family[1:] * family[:-1]), axis=1)
     return np.concatenate([[0.0], 1.0 - same])
@@ -200,10 +241,11 @@ def decode(feats: dict, p: Params = PARAMS) -> dict:
     times = np.concatenate([[0.0], beats, [duration]])
     probs = span_means(feats["probs"], btc.FRAME_S, times)
     rms = span_means(feats["rms"], float(feats["rms_step"]), times)
-    grid = rhythm.bar_grid(beats, downbeats, novelty(probs)[1:])
+    grid = rhythm.bar_grid(beats, downbeats, novelty(probs, p.sharpness)[1:])
     pos = np.concatenate([[-1], grid.pos])           # the stretch before the first beat has no bar position
     size = np.concatenate([grid.size[:1], grid.size]) if len(beats) else np.array([4])
-    segments, key = decode_beats(probs, rms, times, pos, size, p)
+    unit = np.concatenate([grid.unit[:1], grid.unit]) if len(beats) else np.array([1])
+    segments, key = decode_beats(probs, rms, times, pos, size, p, unit)
 
     meters = grid.sections()
     weighted = [(s["chord"], s["end"] - s["start"]) for s in segments if s["chord"] != "N"]

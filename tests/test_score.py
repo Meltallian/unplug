@@ -239,3 +239,14 @@ def test_engrave_refuses_endless_charts():
 
 def test_music_font_is_a_woff2():
     assert score.music_font()[:4] == b"wOF2"
+
+
+def test_engrave_still_works_after_weasyprint_is_imported():
+    # WeasyPrint registers its own default XML namespace in ElementTree's process-wide registry;
+    # the MEI must not depend on that registry (a PDF download used to break every later score).
+    import xml.etree.ElementTree as ET
+
+    text = "{time: 4/4}\n{tempo: 100}\n| [C]la la | [G]la la |\n"
+    assert engrave(text).pages
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    assert engrave(text + "| [Am]la |\n").pages

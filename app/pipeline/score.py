@@ -25,7 +25,6 @@ from app.pipeline.chart import NO_CHORD, meter_of, read_score
 
 MEI_NS = "http://www.music-encoding.org/ns/mei"
 XML_ID = "{http://www.w3.org/XML/1998/namespace}id"
-ET.register_namespace("", MEI_NS)
 
 MIN_WIDTH, MAX_WIDTH = 280, 1600   # CSS pixels the score is laid out for
 MAX_BARS = 1000                    # refuse to engrave more (a real song has a few hundred at most)
@@ -94,7 +93,7 @@ def tempo_mark(tempo: str | None, time: tuple[int, int]) -> tuple[str, str] | No
 
 
 def _el(parent, tag: str, attrs: dict | None = None, text: str | None = None):
-    el = ET.SubElement(parent, f"{{{MEI_NS}}}{tag}", {k: _UNPRINTABLE.sub("", str(v)) for k, v in (attrs or {}).items()})
+    el = ET.SubElement(parent, tag, {k: _UNPRINTABLE.sub("", str(v)) for k, v in (attrs or {}).items()})
     if text is not None:
         el.text = _UNPRINTABLE.sub("", text)
     return el
@@ -109,7 +108,9 @@ def to_mei(score: dict, *, semis: int = 0, key: str = "", capo: int = 0,
     and leaves the header out (used to measure the bars). `small` gives, for the bars whose words do
     not fit on a line, the size of their words in percent."""
     meta = score["meta"]
-    root = ET.Element(f"{{{MEI_NS}}}mei", {"meiversion": "5.0"})
+    # The namespace is written as a plain xmlns attribute, not with ET.register_namespace: that
+    # registry is shared by the whole process, and WeasyPrint (imported for PDFs) changes it.
+    root = ET.Element("mei", {"xmlns": MEI_NS, "meiversion": "5.0"})
     head = _el(_el(_el(root, "meiHead"), "fileDesc"), "titleStmt")
     _el(head, "title", text=meta.get("title", ""))
     if meta.get("artist"):

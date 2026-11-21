@@ -44,6 +44,14 @@ The analysis result (`cache/chords.json`): `tempo`, `meter` (3 = 3/4, 4 = 4/4, 6
 start of the song), `meters` (every change: start, meter, tempo), `downbeats` (all bar starts),
 `key`, `capo`, `segments` (chord, start, end, beats).
 
+## What comes out
+
+The chart text (ChordPro with a row of bars per sung line and `{time}` / `{tempo}` lines where the
+meter changes) and, engraved from it by `app/pipeline/score.py`, the score view. An example with
+made-up words, 6/8 turning into 4/4:
+
+![Engraved score of a made-up example](score-example.png)
+
 ## The benchmark
 
 `make bench` (or `python -m app.eval.bench`) scores the analysis against the McGill Billboard

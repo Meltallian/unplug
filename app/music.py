@@ -1,8 +1,8 @@
 """Music theory helpers: chord names, keys, transposition and capo choice.
 
-A chord is a (root, quality) pair: root is a pitch class 0-11 (C=0), quality is
-"maj" or "min". Version 1 only knows major and minor triads; power chords and
-extensions are reduced to these.
+A chord is a (root, quality) pair: root is a pitch class 0-11 (C=0), quality is "maj", "min" or
+a richer chord of one of these two families ("7", "min7", "sus4", ... see QUALITY_SUFFIX).
+plain() reduces any chord to the major or minor chord a guitarist would strum instead.
 """
 
 import re
@@ -44,11 +44,23 @@ def parse_chord(token: str) -> Chord | None | str:
     return (root, "min" if is_minor else "maj")
 
 
+# How each quality is written after the root, and the family it belongs to.
+QUALITY_SUFFIX = {"maj": "", "min": "m", "7": "7", "maj7": "maj7", "min7": "m7", "sus4": "sus4", "sus2": "sus2",
+                  "dim": "dim", "dim7": "dim7", "hdim7": "m7b5", "aug": "aug", "maj6": "6", "min6": "m6",
+                  "minmaj7": "mMaj7"}
+_MINOR_FAMILY = {"min", "min7", "min6", "minmaj7", "dim", "dim7", "hdim7"}
+
+
+def plain(chord: Chord) -> Chord:
+    """The major or minor chord of the same root."""
+    return (chord[0], "min" if chord[1] in _MINOR_FAMILY else "maj")
+
+
 def chord_name(chord: Chord | str) -> str:
     if chord == "N":
         return "N.C."
     root, quality = chord
-    return NAMES[root] + ("m" if quality == "min" else "")
+    return NAMES[root] + QUALITY_SUFFIX.get(quality, "")
 
 
 def transpose(chord: Chord | str, semitones: int) -> Chord | str:
@@ -58,7 +70,7 @@ def transpose(chord: Chord | str, semitones: int) -> Chord | str:
 
 
 def triad_pcs(chord: Chord) -> tuple[int, int, int]:
-    root, quality = chord
+    root, quality = plain(chord)
     third = 3 if quality == "min" else 4
     return (root, (root + third) % 12, (root + 7) % 12)
 
@@ -97,6 +109,28 @@ def key_from_chords(chords: list[tuple[Chord, float]]) -> Key:
     return estimate_key(prof)
 
 
+TONIC_WEIGHT = 0.3   # how much the time spent on the key's own chord counts next to the time on chords of its scale
+
+
+def key_of_song(chords: list[tuple[Chord, float]]) -> Key:
+    """Key of a song from its chords and the time spent on each: the key whose scale holds most of
+    them, and among keys that do equally well (a major key and its relative minor share their
+    chords) the one whose own chord is played most."""
+    seconds: dict[Chord, float] = {}
+    for chord, weight in chords:
+        seconds[plain(chord)] = seconds.get(plain(chord), 0.0) + weight
+    total = sum(seconds.values())
+    if not total:
+        return (0, "major")
+
+    def fit(key: Key) -> float:
+        own = (key[0], "maj" if key[1] == "major" else "min")
+        scale = diatonic(key)
+        return (sum(w for c, w in seconds.items() if c in scale) + TONIC_WEIGHT * seconds.get(own, 0.0)) / total
+
+    return max(((tonic, mode) for mode in ("major", "minor") for tonic in range(12)), key=fit)
+
+
 def diatonic(key: Key) -> set[Chord]:
     """Chords that fit the key. In minor, the major V is allowed too."""
     t, mode = key
@@ -123,8 +157,12 @@ _SHAPE_COST = {
 }
 
 
+# Richer chords that are easier (or harder) than their plain chord in open position.
+_SHAPE_COST.update({(5, "maj7"): 0.0, (11, "7"): 0.2, (11, "min7"): 0.3, (6, "min7"): 0.6})
+
+
 def shape_cost(chord: Chord) -> float:
-    return _SHAPE_COST.get(chord, 1.0)
+    return _SHAPE_COST.get(chord, _SHAPE_COST.get(plain(chord), 1.0))
 
 
 # A capo must save real effort: each fret costs as much as 6% of the song on a hard shape.
@@ -142,12 +180,19 @@ def choose_capo(chords: list[tuple[Chord, float]], max_capo: int = 7) -> int:
 # --- chord names as written on charts (with any suffix) ---------------------------------------
 _NAME = re.compile(r"^([A-G])([#b]?)(.*?)(?:/([A-G])([#b]?))?$")
 
-# Same shapes as the chart page (static/chart.js), low E to high e.
+# Same shapes as the chart page (static/chart.js), low E (left) to high e; x = not played.
 SHAPES = {
     "C": "x32010", "C#": "x46664", "D": "xx0232", "Eb": "x68886", "E": "022100", "F": "133211",
     "F#": "244322", "G": "320003", "Ab": "466544", "A": "x02220", "Bb": "x13331", "B": "x24442",
     "Cm": "x35543", "C#m": "x46654", "Dm": "xx0231", "Ebm": "x68876", "Em": "022000", "Fm": "133111",
     "F#m": "244222", "Gm": "355333", "Abm": "466444", "Am": "x02210", "Bbm": "x13321", "Bm": "x24432",
+    # richer chords with a common open (or easy) shape of their own
+    "A7": "x02020", "B7": "x21202", "C7": "x32310", "D7": "xx0212", "E7": "020100", "G7": "320001",
+    "F#7": "242322", "Am7": "x02010", "Bm7": "x20202", "Dm7": "xx0211", "Em7": "022030", "F#m7": "242222",
+    "C#m7": "x46454", "Cmaj7": "x32000", "Dmaj7": "xx0222", "Emaj7": "021100", "Fmaj7": "xx3210",
+    "Gmaj7": "320002", "Amaj7": "x02120", "Asus4": "x02230", "Dsus4": "xx0233", "Esus4": "022200",
+    "Gsus4": "330013", "Csus4": "x33011", "Asus2": "x02200", "Dsus2": "xx0230", "Esus2": "024400",
+    "Csus2": "x30013", "Gsus2": "300033", "Fsus2": "xx3011", "Bm7b5": "x2323x", "F#m7b5": "2x221x",
 }
 
 
@@ -162,11 +207,16 @@ def move_chord_name(name: str, semitones: int) -> str:
 
 
 def shape_key(name: str) -> str | None:
+    """The diagram to show for a written chord: its own if we have one (Em7, Dsus4, B7 ...),
+    else the plain major or minor chord of its root (Bbm7 -> Bbm). None if it is no chord."""
     m = _NAME.match(name.strip())
     if not m:
         return None
+    root = NAMES[pc(m.group(1) + m.group(2))]
+    if root + m.group(3) in SHAPES:
+        return root + m.group(3)
     minor = re.match(r"^(m(?!aj)|min|-)", m.group(3)) is not None
-    return NAMES[pc(m.group(1) + m.group(2))] + ("m" if minor else "")
+    return root + ("m" if minor else "")
 
 
 def diagram_svg(key: str) -> str:

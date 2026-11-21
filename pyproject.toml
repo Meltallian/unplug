@@ -20,6 +20,8 @@ dependencies = [
     "numpy>=1.26",
     "soundfile>=0.12",
     "weasyprint>=63.0",
+    "verovio>=6.4,<7",
+    "openai-whisper>=20250625",
     "beat-this>=1.1.0",
     "torch>=2.5",
     "torchaudio>=2.5",
@@ -31,12 +33,16 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+[tool.uv]
+# openai-whisper asks for triton (GPU kernels, several hundred MB) on Linux; we run on CPU
+override-dependencies = ["triton ; sys_platform == 'never'"]
+
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu" }]
 torchaudio = [{ index = "pytorch-cpu" }]
 
 [dependency-groups]
-dev = ["pytest>=8.3"]
+dev = ["pytest>=8.3", "mir_eval>=0.8"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

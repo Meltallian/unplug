@@ -1,13 +1,29 @@
 """Stage 1: fetch the audio from YouTube and keep it (compressed) in the song folder."""
 
 import json
+import shutil
+import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import yt_dlp
 
 RETRIES = 2        # extra attempts after a failed download
 RETRY_WAIT = 3.0   # seconds between attempts
+
+
+@contextmanager
+def _writable_copy(cookies_file: Path | None):
+    """yt-dlp writes the cookie jar back on close, but secrets are mounted read-only:
+    hand it a private copy (one per download, so parallel workers never share a file)."""
+    if not (cookies_file and cookies_file.exists()):
+        yield None
+        return
+    with tempfile.TemporaryDirectory(prefix="unplug-cookies-") as tmp:
+        copy = Path(tmp) / "cookies.txt"
+        shutil.copyfile(cookies_file, copy)
+        yield copy
 
 
 def download(youtube_id: str, song_dir: Path, cookies_file: Path | None = None) -> dict:
@@ -26,18 +42,19 @@ def download(youtube_id: str, song_dir: Path, cookies_file: Path | None = None) 
         "quiet": True,
         "no_warnings": True,
     }
-    if cookies_file and cookies_file.exists():
-        opts["cookiefile"] = str(cookies_file)
 
-    for attempt in range(RETRIES + 1):
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(f"https://www.youtube.com/watch?v={youtube_id}", download=True)
-            break
-        except yt_dlp.utils.DownloadError:      # YouTube answers 403 now and then; the next try usually passes
-            if attempt == RETRIES:
-                raise
-            time.sleep(RETRY_WAIT)
+    with _writable_copy(cookies_file) as cookies:
+        if cookies:
+            opts["cookiefile"] = str(cookies)
+        for attempt in range(RETRIES + 1):
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(f"https://www.youtube.com/watch?v={youtube_id}", download=True)
+                break
+            except yt_dlp.utils.DownloadError:      # YouTube answers 403 now and then; the next try usually passes
+                if attempt == RETRIES:
+                    raise
+                time.sleep(RETRY_WAIT)
 
     audio = Path(info["requested_downloads"][0]["filepath"])
     meta = {

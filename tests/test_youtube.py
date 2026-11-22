@@ -47,3 +47,32 @@ def test_download_is_tried_again_after_a_refusal(tmp_path, monkeypatch):
     import pytest
     with pytest.raises(yt_dlp.utils.DownloadError):
         dl.download("abcdefghijk", tmp_path)
+
+
+def test_cookies_are_used_from_a_writable_copy(tmp_path, monkeypatch):
+    from app.pipeline import download as dl
+
+    secret = tmp_path / "secrets" / "youtube-cookies.txt"
+    secret.parent.mkdir()
+    secret.write_text("# Netscape HTTP Cookie File\n")
+    secret.chmod(0o400)                      # mounted read-only in the containers
+    seen = {}
+
+    class Fake:
+        def __init__(self, opts): self.opts = opts
+        def __enter__(self): return self
+        def __exit__(self, *a):              # yt-dlp saves the cookie jar on close
+            Path(self.opts["cookiefile"]).write_text("updated")
+            return False
+        def extract_info(self, url, download):
+            seen["cookiefile"] = self.opts["cookiefile"]
+            song = tmp_path / "song"
+            (song / "audio.webm").write_bytes(b"x")
+            return {"title": "T", "requested_downloads": [{"filepath": str(song / "audio.webm")}]}
+
+    from pathlib import Path
+    monkeypatch.setattr(dl.yt_dlp, "YoutubeDL", Fake)
+    dl.download("abcdefghijk", tmp_path / "song", secret)
+    assert seen["cookiefile"] != str(secret)
+    assert secret.read_text() == "# Netscape HTTP Cookie File\n"
+    assert not Path(seen["cookiefile"]).exists()     # the copy is cleaned up

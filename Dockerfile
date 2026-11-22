@@ -1,8 +1,9 @@
 FROM python:3.12-slim-bookworm
 
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
-# yt-dlp needs a JavaScript runtime for YouTube extraction
-COPY --from=denoland/deno:bin-2.1.4 /deno /usr/local/bin/deno
+# yt-dlp needs a supported JavaScript runtime to solve YouTube challenges; an old deno is
+# reported "unsupported" and YouTube then answers "Sign in to confirm you’re not a bot"
+COPY --from=denoland/deno:bin-2.9.8 /deno /usr/local/bin/deno
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0 fonts-dejavu-core \
